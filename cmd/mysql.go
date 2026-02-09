@@ -138,7 +138,7 @@ func anonymousLoginCheck() error {
 
 func userAccountsAndAuth(db *sql.DB) {
 	printHeader("USER ACCOUNTS & AUTHENITCATION PLUGINS")
-	fmt.Printf("%-25s | %-15s | %-15s\n", "User@Host", "Plugin", "Password Set")
+	fmt.Printf("  %-25s | %-15s | %-15s\n", "User@Host", "Plugin", "Password Set")
 	query := `
 		SELECT User, Host, plugin, 
 		IF(authentication_string='' OR Password='', 'NO', 'YES') 
