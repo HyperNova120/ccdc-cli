@@ -365,7 +365,7 @@ func connectToDatabase(user string, password string, host string, port int, dbNa
 	}
 
 	db.SetConnMaxLifetime(time.Minute * 3)
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(6)
 
 	fmt.Printf("Connecting to MySQL at %s:%d...\n", host, port)
 	return db, nil
