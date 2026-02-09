@@ -84,7 +84,9 @@ func runInventory() {
 		return
 	}
 
-	anonymousLoginCheck()
+	if anonymousLoginCheck() != nil {
+		return
+	}
 
 	db, err := connectToDatabase(username, password, host, port, dbName)
 	if err != nil {
@@ -100,11 +102,11 @@ func runInventory() {
 	userAccountsAndAuth(db)
 }
 
-func anonymousLoginCheck() {
+func anonymousLoginCheck() error {
 	db, err := connectToDatabase("", "", host, port, dbName)
 	if err != nil {
 		fmt.Println(err)
-		return
+		return err
 	}
 	defer db.Close()
 	printHeader("ANONYMOUS LOGIN TEST")
@@ -115,6 +117,7 @@ func anonymousLoginCheck() {
 	} else {
 		fmt.Println("Anonymous login disabled")
 	}
+	return nil
 }
 
 func userAccountsAndAuth(db *sql.DB) {
