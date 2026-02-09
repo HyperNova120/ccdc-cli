@@ -37,7 +37,9 @@ var mysqlCmd = &cobra.Command{
 This Module Contains the Following Functionality:
 - Backup a Database
 - Restore a Database
-- Inventory a Database`,
+- Inventory a Database
+
+This Command must be run with any of the following flags: -irb`,
 	RunE:         runCmd,
 	SilenceUsage: true,
 }
@@ -156,6 +158,11 @@ func printHeader(header string) {
 	fmt.Println("-----------------------------------------------------")
 }
 
+// ===========================================================
+//
+//	BACKUP COMMAND
+//
+// ===========================================================
 func runBackup() {
 	if len(file) == 0 {
 		fmt.Println("This command requires -f to be specified")
@@ -166,13 +173,13 @@ func runBackup() {
 	}
 	password, err := getPassword()
 	if err != nil {
-		fmt.Errorf("failed to read password")
+		fmt.Printf("failed to read password")
 		return
 	}
 
 	ofile, err := os.Create(file)
 	if err != nil {
-		fmt.Errorf("%w", err)
+		fmt.Printf("%s", err)
 		return
 	}
 	defer ofile.Close()
@@ -195,7 +202,7 @@ func runBackup() {
 
 	err = cmd.Run()
 	if err != nil {
-		fmt.Printf("Backup Failed: %w\n", err)
+		fmt.Printf("Backup Failed: %s\n", err)
 		return
 	}
 
@@ -207,6 +214,12 @@ func CheckCliCmdExist(cmd string) bool {
 	return err == nil
 }
 
+// ===========================================================
+//
+//											RESTORE COMMAND
+//
+// ===========================================================
+
 func runRestore() {
 	if len(file) == 0 {
 		fmt.Println("This command requires -f to be specified")
@@ -217,7 +230,7 @@ func runRestore() {
 	}
 	password, err := getPassword()
 	if err != nil {
-		fmt.Errorf("failed to read password")
+		fmt.Printf("failed to read password")
 		return
 	}
 	ifile, err := os.Open(file)
@@ -240,7 +253,7 @@ func runRestore() {
 	fmt.Printf("Restoring backup from %s...\n", file)
 	err = cmd.Run()
 	if err != nil {
-		fmt.Printf("Restore Failed: %w", err)
+		fmt.Printf("Restore Failed: %s", err)
 		os.Remove(file)
 		return
 	}
