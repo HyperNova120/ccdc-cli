@@ -204,13 +204,13 @@ func userPrivileges(db *sql.DB) {
 		if err != nil {
 			fmt.Println("\t|-- [!] Could not retrieve")
 			fmt.Println()
+			continue
 		}
 		defer grantRows.Close()
 
 		for grantRows.Next() {
 			var grant string
 			if err := grantRows.Scan(&grant); err != nil {
-				fmt.Println(err)
 				continue
 			}
 			fmt.Printf("\t|-- %s\n", grant)
