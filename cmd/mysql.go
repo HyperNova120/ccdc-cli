@@ -198,25 +198,25 @@ func userPrivileges(db *sql.DB) {
 		if err := userRows.Scan(&user, &host); err != nil {
 			continue
 		}
-		fmt.Printf("\tGRANT for '%s'@'%s':\n", user, host)
+		fmt.Printf("  GRANT for '%s'@'%s':\n", user, host)
 		query = fmt.Sprintf("SHOW GRANTS FOR '%s'@'%s'", user, host)
 		grantRows, err := db.Query(query)
 		if err != nil {
-			fmt.Println("\t|-- [!] Could not retrieve")
+			fmt.Println("    |-- [!] Could not retrieve")
 			fmt.Println()
 			continue
 		}
-		defer grantRows.Close()
 
 		for grantRows.Next() {
 			var grant string
 			if err := grantRows.Scan(&grant); err != nil {
 				continue
 			}
-			fmt.Printf("\t|-- %s\n", grant)
+			fmt.Printf("    |-- %s\n", grant)
 		}
+		grantRows.Close()
+		fmt.Println()
 	}
-	fmt.Println()
 }
 
 func printHeader(header string) {
