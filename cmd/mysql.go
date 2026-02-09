@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -119,6 +120,14 @@ func anonymousLoginCheck() error {
 
 	if err != nil {
 		fmt.Println(err)
+
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) {
+			if mysqlErr.Number == 1045 {
+				fmt.Println("Anonymous login disabled")
+				return nil
+			}
+		}
 		fmt.Printf("Server at %s allows ANONYMOUS login.\n", host)
 	} else {
 		fmt.Println("Anonymous login disabled")
