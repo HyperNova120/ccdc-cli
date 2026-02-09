@@ -210,6 +210,7 @@ func userPrivileges(db *sql.DB) {
 		for grantRows.Next() {
 			var grant string
 			if err := grantRows.Scan(&grant); err != nil {
+				fmt.Println(err)
 				continue
 			}
 			fmt.Printf("\t|-- %s\n", grant)
