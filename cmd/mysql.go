@@ -118,6 +118,7 @@ func anonymousLoginCheck() error {
 	err = db.Ping()
 
 	if err != nil {
+		fmt.Println(err)
 		fmt.Printf("Server at %s allows ANONYMOUS login.\n", host)
 	} else {
 		fmt.Println("Anonymous login disabled")
