@@ -159,7 +159,7 @@ func userAccountsAndAuth(db *sql.DB) {
 		}
 
 		userHost := fmt.Sprintf("%s@%s", user, host)
-		fmt.Printf("%-25s | %-15s | %-15s\n", userHost, plugin, passSet)
+		fmt.Printf("  %-25s | %-15s | %-15s\n", userHost, plugin, passSet)
 	}
 
 	if err = rows.Err(); err != nil {
@@ -184,10 +184,10 @@ func userRoleMappings(db *sql.DB) {
 		found = true
 		var user, host, role string
 		if err := rows.Scan(&user, &host, &role); err != nil {
-			fmt.Printf("Error Scanning Row: %s\n", err)
+			fmt.Printf("  Error Scanning Row: %s\n", err)
 		}
 
-		fmt.Printf("\t- User '%s'@'%s' has role: %s\n", user, host, role)
+		fmt.Printf("  - User '%s'@'%s' has role: %s\n", user, host, role)
 	}
 
 	if !found {
