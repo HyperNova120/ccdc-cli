@@ -91,7 +91,7 @@ func runInventory() {
 		return
 	}
 
-	db, err := connectToDatabase(username, password, host, port, dbName, true)
+	db, err := connectToDatabase(username, password, host, port, dbName, false)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -110,7 +110,7 @@ func runInventory() {
 }
 
 func anonymousLoginCheck() error {
-	db, err := connectToDatabase("", "", host, port, dbName, false)
+	db, err := connectToDatabase("", "", host, port, dbName, true)
 	if err != nil {
 		fmt.Println(err)
 		return err
