@@ -83,24 +83,10 @@ func runInventory() {
 		fmt.Println("failed to read password")
 		return
 	}
-	db, err := connectToDatabase("", "", host, port, dbName)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer db.Close()
 
-	printHeader("ANONYMOUS LOGIN TEST")
-	err = db.Ping()
+	anonymousLoginCheck()
 
-	if err != nil {
-		fmt.Printf("Server at %s allows ANONYMOUS login.\n", host)
-	} else {
-		fmt.Println("Anonymous login disabled")
-	}
-	db.Close()
-
-	db, err = connectToDatabase(username, password, host, port, dbName)
+	db, err := connectToDatabase(username, password, host, port, dbName)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -112,6 +98,23 @@ func runInventory() {
 		return
 	}
 	userAccountsAndAuth(db)
+}
+
+func anonymousLoginCheck() {
+	db, err := connectToDatabase("", "", host, port, dbName)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer db.Close()
+	printHeader("ANONYMOUS LOGIN TEST")
+	err = db.Ping()
+
+	if err != nil {
+		fmt.Printf("Server at %s allows ANONYMOUS login.\n", host)
+	} else {
+		fmt.Println("Anonymous login disabled")
+	}
 }
 
 func userAccountsAndAuth(db *sql.DB) {
