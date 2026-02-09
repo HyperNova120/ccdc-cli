@@ -106,6 +106,7 @@ func runInventory() {
 	userRoleMappings(db)
 	userPrivileges(db)
 	databaseTableInventory(db)
+	securityVars(db)
 }
 
 func anonymousLoginCheck() error {
@@ -119,7 +120,7 @@ func anonymousLoginCheck() error {
 	err = db.Ping()
 
 	if err != nil {
-		fmt.Println(err)
+		// fmt.Println(err)
 
 		var mysqlErr *mysql.MySQLError
 		if errors.As(err, &mysqlErr) {
@@ -288,6 +289,28 @@ func databaseTableInventory(db *sql.DB) {
 		}
 		tRows.Close()
 		fmt.Println()
+	}
+}
+
+func securityVars(db *sql.DB) {
+	printHeader("CRITICAL SECURITY VARIABLES")
+
+	query := `SHOW VARIABLES WHERE Variable_name IN ('local_infile', 'skip_networking', 'have_ssl', 'version')`
+	rows, err := db.Query(query)
+	if err != nil {
+		fmt.Printf("Error retrieving security variables", err)
+		return
+	}
+	defer rows.Close()
+
+	fmt.Printf("  %-25s | %-10s\n", "Variable Name", "Values")
+
+	for rows.Next() {
+		var varName, varValue string
+		if err := rows.Scan(&varName, &varValue); err != nil {
+			continue
+		}
+		fmt.Printf("  %-25s | %-10s\n", varName, varValue)
 	}
 }
 
