@@ -103,6 +103,7 @@ func runInventory() {
 	}
 	userAccountsAndAuth(db)
 	userRoleMappings(db)
+	userPrivileges(db)
 }
 
 func anonymousLoginCheck() error {
@@ -174,12 +175,47 @@ func userRoleMappings(db *sql.DB) {
 			fmt.Printf("Error Scanning Row: %s\n", err)
 		}
 
-		fmt.Printf("\t- User %s@%s has role: %s\n", user, host, role)
+		fmt.Printf("\t- User '%s'@'%s' has role: %s\n", user, host, role)
 	}
 
 	if !found {
 		fmt.Println("No Specific Roles Mapped")
 	}
+}
+
+func userPrivileges(db *sql.DB) {
+	printHeader("Detailed User Privileges (GRANTS)")
+
+	query := "SELECT User, Host FROM mysql.user"
+	userRows, err := db.Query(query)
+	if err != nil {
+		fmt.Println("Error reading users from db")
+		return
+	}
+	defer userRows.Close()
+	for userRows.Next() {
+		var user, host string
+		if err := userRows.Scan(&user, &host); err != nil {
+			continue
+		}
+		fmt.Printf("\tGRANT for '%s'@'%s':\n", user, host)
+		query = fmt.Sprintf("SHOW GRANTS FOR '%s'@'%s'", user, host)
+		grantRows, err := db.Query(query)
+		if err != nil {
+			fmt.Println("\t|-- [!] Could not retrieve")
+			fmt.Println()
+		}
+		defer grantRows.Close()
+
+		for grantRows.Next() {
+			var grant string
+			if err := grantRows.Scan(&grant); err != nil {
+				continue
+			}
+			fmt.Printf("\t|-- %s\n", grant)
+		}
+	}
+	fmt.Println()
 }
 
 func printHeader(header string) {
