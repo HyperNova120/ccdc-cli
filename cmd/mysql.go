@@ -104,6 +104,7 @@ func runInventory() {
 	userAccountsAndAuth(db)
 	userRoleMappings(db)
 	userPrivileges(db)
+	databaseTableInventory(db)
 }
 
 func anonymousLoginCheck() error {
