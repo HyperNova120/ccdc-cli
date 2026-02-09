@@ -258,9 +258,9 @@ func databaseTableInventory(db *sql.DB) {
 			WHERE table_schema='%s'`, dbName)
 		err = db.QueryRow(sizeQuery).Scan(&dbSize)
 		if err != nil {
-			fmt.Printf("DATABASE: %s (Size: 0 MB)\n", dbName)
+			fmt.Printf("  DATABASE: %s (Size: 0 MB)\n", dbName)
 		} else {
-			fmt.Printf("DATABASE: %s (Size: %.2f MB)\n", dbName, dbSize.Float64)
+			fmt.Printf("  DATABASE: %s (Size: %.2f MB)\n", dbName, dbSize.Float64)
 		}
 
 		tableQuery := fmt.Sprintf(`
@@ -273,7 +273,7 @@ func databaseTableInventory(db *sql.DB) {
 
 		tRows, err := db.Query(tableQuery)
 		if err != nil {
-			fmt.Printf("  |-- [1] Could not retrieve tables for %s\n", dbName)
+			fmt.Printf("    |-- [1] Could not retrieve tables for %s\n", dbName)
 			continue
 		}
 		defer tRows.Close()
@@ -284,7 +284,7 @@ func databaseTableInventory(db *sql.DB) {
 				continue
 			}
 
-			fmt.Printf("  |-- %-25s | %-10s | Rows: %-8s | Created: %s\n", tName, tEng, tRowsCount, tDate)
+			fmt.Printf("    |-- %-25s | %-10s | Rows: %-8s | Created: %s\n", tName, tEng, tRowsCount, tDate)
 
 		}
 		tRows.Close()
