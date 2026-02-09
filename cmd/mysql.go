@@ -219,6 +219,67 @@ func userPrivileges(db *sql.DB) {
 	}
 }
 
+func databaseTableInventory(db *sql.DB) {
+	printHeader("Database and Table Inventory")
+
+	query := `
+									SELECT schema_name
+									FROM information_schema.schemata
+									WHERE schema_name NOT IN ('information_schema', 'performance_schema', 'sys', 'mysql')`
+
+	dbRows, err := db.Query(query)
+	if err != nil {
+		fmt.Printf("Error fetching databases: %v\n", err)
+	}
+	defer dbRows.Close()
+
+	for dbRows.Next() {
+		var dbName string
+		if err := dbRows.Scan(&dbName); err != nil {
+			continue
+		}
+
+		var dbSize sql.NullFloat64
+		sizeQuery := fmt.Sprintf(`
+			SELECT ROUND (SUM(data_length + index_length) / 1024 / 1024, 2)
+			FROM information_schema.tables
+			WHERE table_schema='%s'`, dbName)
+		err = db.QueryRow(sizeQuery).Scan(&dbSize)
+		if err != nil {
+			fmt.Printf("DATABASE: %s (Size: 0 MB)\n", dbName)
+		} else {
+			fmt.Printf("DATABASE: %s (Size: %.2f MB)\n", dbName, dbSize.Float64)
+		}
+
+		tableQuery := fmt.Sprintf(`
+			SELECT table_name,
+							COALESCE(engine, 'N/A'),
+							COALESCE(table_rows, 0),
+							COALESCE(create_time, 'N/A')
+			FROM information_schema.tables
+			WHERE table_schema='%s'`, dbName)
+
+		tRows, err := db.Query(tableQuery)
+		if err != nil {
+			fmt.Printf("  |-- [1] Could not retrieve tables for %s\n", dbName)
+			continue
+		}
+		defer tRows.Close()
+
+		for tRows.Next() {
+			var tName, tEng, tRowsCount, tDate string
+			if err := tRows.Scan(&tName, &tEng, &tRowsCount, &tDate); err != nil {
+				continue
+			}
+
+			fmt.Printf("  |-- %-25s | %-10s | Rows: %-8s | Created: %s\n", tName, tEng, tRowsCount, tDate)
+
+		}
+		tRows.Close()
+		fmt.Println()
+	}
+}
+
 func printHeader(header string) {
 	fmt.Println("\n\n-----------------------------------------------------")
 	fmt.Println(header)
