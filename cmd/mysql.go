@@ -102,6 +102,7 @@ func runInventory() {
 		return
 	}
 	userAccountsAndAuth(db)
+	userRoleMappings(db)
 }
 
 func anonymousLoginCheck() error {
@@ -153,7 +154,36 @@ func userAccountsAndAuth(db *sql.DB) {
 	}
 }
 
+func userRoleMappings(db *sql.DB) {
+	printHeader("ROLE MAPPINGS")
+
+	query := `SELECT User, Host, Role FROM mysql.roles_mapping;`
+	rows, err := db.Query(query)
+	if err != nil {
+		fmt.Println("No Specific Role Mappings")
+		return
+	}
+	defer rows.Close()
+
+	found := false
+
+	for rows.Next() {
+		found = true
+		var user, host, role string
+		if err := rows.Scan(&user, &host, &role); err != nil {
+			fmt.Printf("Error Scanning Row: %s\n", err)
+		}
+
+		fmt.Printf("\t- User %s@%s has role: %s\n", user, host, role)
+	}
+
+	if !found {
+		fmt.Println("No Specific Roles Mapped")
+	}
+}
+
 func printHeader(header string) {
+	fmt.Println("\n\n-----------------------------------------------------")
 	fmt.Println(header)
 	fmt.Println("-----------------------------------------------------")
 }
