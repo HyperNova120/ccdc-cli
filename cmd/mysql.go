@@ -206,7 +206,7 @@ func userPrivileges(db *sql.DB) {
 			fmt.Println()
 			continue
 		}
-
+		defer grantRows.Close()
 		for grantRows.Next() {
 			var grant string
 			if err := grantRows.Scan(&grant); err != nil {
