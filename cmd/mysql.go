@@ -91,7 +91,7 @@ func runInventory() {
 		return
 	}
 
-	db, err := connectToDatabase(username, password, host, port, dbName)
+	db, err := connectToDatabase(username, password, host, port, dbName, true)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -110,7 +110,7 @@ func runInventory() {
 }
 
 func anonymousLoginCheck() error {
-	db, err := connectToDatabase("", "", host, port, dbName)
+	db, err := connectToDatabase("", "", host, port, dbName, false)
 	if err != nil {
 		fmt.Println(err)
 		return err
@@ -429,7 +429,7 @@ func runDefault() error {
 		return fmt.Errorf("failed to read password")
 	}
 
-	db, err := connectToDatabase(username, p, host, port, dbName)
+	db, err := connectToDatabase(username, p, host, port, dbName, true)
 	if err != nil {
 		return fmt.Errorf("")
 	}
@@ -444,7 +444,7 @@ func runDefault() error {
 	return nil
 }
 
-func connectToDatabase(user string, password string, host string, port int, dbName string) (*sql.DB, error) {
+func connectToDatabase(user string, password string, host string, port int, dbName string, shouldPrintConnecting bool) (*sql.DB, error) {
 	dns := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true", username, password, host, port, dbName)
 	db, err := sql.Open("mysql", dns)
 	if err != nil {
@@ -461,8 +461,9 @@ func connectToDatabase(user string, password string, host string, port int, dbNa
 
 	db.SetConnMaxLifetime(time.Minute * 3)
 	db.SetMaxOpenConns(6)
-
-	fmt.Printf("Connecting to MySQL at %s:%d...\n", host, port)
+	if shouldPrintConnecting {
+		fmt.Printf("Connecting to MySQL at %s:%d...\n", host, port)
+	}
 	return db, nil
 }
 
