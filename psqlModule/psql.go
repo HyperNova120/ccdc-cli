@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -76,7 +77,13 @@ func runCmd(cmd *cobra.Command, args []string) error {
 }
 
 func runInventory() {
-	db, err := connectToDatabase(username, host, port)
+	password, err := utils.GetPassword()
+	if err != nil {
+		fmt.Println("Error Reading Password")
+		return
+	}
+
+	db, err := connectToDatabase(username, password, host, port)
 	if err != nil {
 		fmt.Printf("%v", err)
 		return
@@ -113,6 +120,12 @@ func userAccounts(db *sql.DB) {
 }
 
 func dataAccessPermissions(db *sql.DB) {
+	password, err := utils.GetPassword()
+	if err != nil {
+		fmt.Println("Error Reading Password")
+		return
+	}
+
 	utils.PrintHeader("DATA ACCESS PERMISSIONS")
 	query := `
 	SELECT datname 
@@ -131,7 +144,7 @@ func dataAccessPermissions(db *sql.DB) {
 		if err := drows.Scan(&dname); err != nil {
 			continue
 		}
-		db2, err := connectToDatabaseDB(username, host, port, dname)
+		db2, err := connectToDatabaseDB(username, password, host, port, dname)
 		if err != nil {
 			fmt.Printf("  |-- Unable to connect to %s\n", dname)
 			continue
@@ -168,6 +181,12 @@ func dataAccessPermissions(db *sql.DB) {
 }
 
 func instanceInventory(db *sql.DB) {
+	password, err := utils.GetPassword()
+	if err != nil {
+		fmt.Println("Error Reading Password")
+		return
+	}
+
 	utils.PrintHeader("INSTANCE CONTENT INVENTORY")
 	query := `
 	SELECT datname 
@@ -198,7 +217,7 @@ func instanceInventory(db *sql.DB) {
 		}
 		fmt.Printf("  |-- DATABASE: %s (SIZE: %s)", dbName, dsize)
 
-		db2, err := connectToDatabaseDB(username, host, port, dbName)
+		db2, err := connectToDatabaseDB(username, password, host, port, dbName)
 		if err != nil {
 			continue
 		}
@@ -227,13 +246,16 @@ func instanceInventory(db *sql.DB) {
 	}
 }
 
-func connectToDatabase(username, host string, port int) (*sql.DB, error) {
-	return connectToDatabaseDB(username, host, port, "postgres")
+func connectToDatabase(username, password, host string, port int) (*sql.DB, error) {
+	return connectToDatabaseDB(username, password, host, port, "postgres")
 }
 
-func connectToDatabaseDB(username, host string, port int, dbname string) (*sql.DB, error) {
+func connectToDatabaseDB(username, password, host string, port int, dbname string) (*sql.DB, error) {
 	fmt.Printf("Connecting to database: '%s' at %s:%d", dbname, host, port)
-	dns := fmt.Sprintf("postgres://%s@%s:%d/%s?sslmode=disable", username, host, port, dbname)
+
+	userInfo := url.UserPassword(username, password)
+	dns := fmt.Sprintf("postgres://%s@%s:%d/%s?sslmode=disable", userInfo, host, port, dbname)
+
 	db, err := sql.Open("pgx", dns)
 	if err != nil {
 		return nil, fmt.Errorf("Could not open connection: %w", err)
