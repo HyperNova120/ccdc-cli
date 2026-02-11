@@ -110,6 +110,7 @@ func userAccounts(db *pgxpool.Pool) {
 	for rows.Next() {
 		var rname, rsup, rnop, rlog string
 		if err := rows.Scan(&rname, rsup, rnop, rlog); err != nil {
+			fmt.Printf("Error reading user: %v\n", err)
 			continue
 		}
 		fmt.Printf(" |-- %-25s | Super: %-3s | NoPass: %-3s | Login: %s\n", rname, rsup, rnop, rlog)
@@ -139,6 +140,7 @@ func dataAccessPermissions(db *pgxpool.Pool) {
 	for drows.Next() {
 		var dname string
 		if err := drows.Scan(&dname); err != nil {
+			fmt.Printf("Error reading databases: %v\n", err)
 			continue
 		}
 		db2, err := connectToDatabaseDB(username, password, host, port, dname, false)
@@ -160,12 +162,14 @@ func dataAccessPermissions(db *pgxpool.Pool) {
 
 		arows, err := db.Query(context.Background(), query)
 		if err != nil {
+			fmt.Printf("Error reading tables: %v\n", err)
 			continue
 		}
 		defer arows.Close()
 		for arows.Next() {
 			var dbName, uname, uconn, uread, uwrite string
 			if err := arows.Scan(&dbName, &uname, &uconn, &uread, &uwrite); err != nil {
+				fmt.Printf("Error scanning tables: %v\n", err)
 				continue
 			}
 			// if uconn == "YES" || uread == "YES" {
