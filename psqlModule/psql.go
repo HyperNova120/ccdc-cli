@@ -2,6 +2,11 @@ package psqlModule
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+
+	"ccdc-cli/utils"
 
 	"github.com/spf13/cobra"
 )
@@ -64,14 +69,90 @@ func runCmd(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runRestore() {
+func runInventory() {
 	panic("unimplemented")
+}
+
+func runRestore() {
+	if !utils.CheckCliCmdExist("psql") {
+		fmt.Println("This command requires 'psql' to be in path")
+		return
+	} else if len(file) == 0 {
+		fmt.Println("This command requires the -f flag to be set")
+		return
+	}
+
+	password, err := utils.GetPassword()
+	if err != nil {
+		fmt.Println("Failed to read password!")
+		return
+	}
+
+	ifile, err := os.Open(file)
+	if err != nil {
+		fmt.Printf("Failed to open backup file: %v", err)
+		return
+	}
+	defer ifile.Close()
+
+	cmd := exec.Command("psql",
+		"-h", host,
+		"-p", strconv.Itoa(port),
+		"-U", username,
+		"-d", "postgres")
+
+	cmd.Env = append(os.Environ(), fmt.Sprintf("PGPASSWORD=%s", password))
+
+	cmd.Stdin = ifile
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+
+	fmt.Printf("Starting full restoration frum %s\n", file)
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Restore failed: %v\n", err)
+		return
+	}
+	fmt.Println("Restoration completed successfully!")
 }
 
 func runBackup() {
-	panic("unimplemented")
-}
+	if !utils.CheckCliCmdExist("pg_dumpall") {
+		fmt.Println("This command requires 'pg_dumpall' to be in path")
+		return
+	} else if len(file) == 0 {
+		fmt.Println("This command requires the -f flag to be set")
+		return
+	}
 
-func runInventory() {
-	panic("unimplemented")
+	password, err := utils.GetPassword()
+	if err != nil {
+		fmt.Println("Failed to read password!")
+		return
+	}
+
+	cmd := exec.Command("pg_dumpall",
+		"-h", host,
+		"-p", strconv.Itoa(port),
+		"-U", username)
+
+	cmd.Env = append(os.Environ(), fmt.Sprintf("PGPASSWORD=%s", password))
+
+	ofile, err := os.Create(file)
+	if err != nil {
+		fmt.Printf("Failed to create backup file: %v\n", err)
+		return
+	}
+	defer ofile.Close()
+
+	cmd.Stdout = ofile
+	cmd.Stderr = os.Stderr
+
+	fmt.Printf("Backing up instance from %s:%d", host, port)
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Backup Failed: %v\n", err)
+		os.Remove(file)
+		return
+	}
+
+	fmt.Printf("Created Backup: %s\n", file)
 }
