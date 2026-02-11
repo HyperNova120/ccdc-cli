@@ -95,7 +95,7 @@ func runInventory() {
 func userAccounts(db *pgxpool.Pool) {
 	utils.PrintHeader("USER ACCOUNTS")
 	query := `
-	SELECT rolename,
+	SELECT rolname,
 	CASE WHEN rolsuper THEN 'YES' ELSE 'NO' END,
 	CASE WHEN rolpassword IS NULL THEN 'YES' ELSE 'NO' END,
 	CASE WHEN rolcanlogin THEN 'YES' ELSE 'NO' END
@@ -103,7 +103,7 @@ func userAccounts(db *pgxpool.Pool) {
 
 	rows, err := db.Query(context.Background(), query)
 	if err != nil {
-		fmt.Printf("Error querying database: %v", err)
+		fmt.Printf("Error querying database: %v\n", err)
 		return
 	}
 	defer rows.Close()
@@ -141,7 +141,7 @@ func dataAccessPermissions(db *pgxpool.Pool) {
 		if err := drows.Scan(&dname); err != nil {
 			continue
 		}
-		db2, err := connectToDatabaseDB(username, password, host, port, dname)
+		db2, err := connectToDatabaseDB(username, password, host, port, dname, false)
 		if err != nil {
 			fmt.Printf("  |-- Unable to connect to %s\n", dname)
 			continue
@@ -168,9 +168,9 @@ func dataAccessPermissions(db *pgxpool.Pool) {
 			if err := arows.Scan(&dbName, &uname, &uconn, &uread, &uwrite); err != nil {
 				continue
 			}
-			if uconn == "YES" || uread == "YES" {
-				fmt.Printf("  |-- DB: %-15s | User: %-15s | Conn: %-3s | Read: %-3s | Write: %s\n", dbName, uname, uconn, uread, uwrite)
-			}
+			// if uconn == "YES" || uread == "YES" {
+			fmt.Printf("  |-- DB: %-15s | User: %-15s | Conn: %-3s | Read: %-3s | Write: %s\n", dbName, uname, uconn, uread, uwrite)
+			//}
 		}
 		arows.Close()
 		db2.Close()
@@ -214,7 +214,7 @@ func instanceInventory(db *pgxpool.Pool) {
 		}
 		fmt.Printf("  |-- DATABASE: %s (SIZE: %s)", dbName, dsize)
 
-		db2, err := connectToDatabaseDB(username, password, host, port, dbName)
+		db2, err := connectToDatabaseDB(username, password, host, port, dbName, false)
 		if err != nil {
 			continue
 		}
@@ -244,11 +244,13 @@ func instanceInventory(db *pgxpool.Pool) {
 }
 
 func connectToDatabase(username, password, host string, port int) (*pgxpool.Pool, error) {
-	return connectToDatabaseDB(username, password, host, port, "postgres")
+	return connectToDatabaseDB(username, password, host, port, "postgres", true)
 }
 
-func connectToDatabaseDB(username, password, host string, port int, dbname string) (*pgxpool.Pool, error) {
-	fmt.Printf("Connecting to database: '%s' at %s:%d", dbname, host, port)
+func connectToDatabaseDB(username, password, host string, port int, dbname string, shouldPrint bool) (*pgxpool.Pool, error) {
+	if shouldPrint {
+		fmt.Printf("Connecting to database: '%s' at %s:%d", dbname, host, port)
+	}
 
 	userInfo := url.UserPassword(username, password)
 	dns := fmt.Sprintf("postgres://%s@%s:%d/%s?sslmode=disable", userInfo, host, port, dbname)
