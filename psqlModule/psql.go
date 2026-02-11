@@ -1,20 +1,17 @@
 package psqlModule
 
 import (
-	"database/sql"
-	"errors"
+	"context"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
-	"strings"
 	"time"
 
 	"ccdc-cli/utils"
 
-	_ "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 )
 
@@ -85,7 +82,7 @@ func runInventory() {
 
 	db, err := connectToDatabase(username, password, host, port)
 	if err != nil {
-		fmt.Printf("%v", err)
+		fmt.Printf("%v\n", err)
 		return
 	}
 	defer db.Close()
@@ -95,7 +92,7 @@ func runInventory() {
 	instanceInventory(db)
 }
 
-func userAccounts(db *sql.DB) {
+func userAccounts(db *pgxpool.Pool) {
 	utils.PrintHeader("USER ACCOUNTS")
 	query := `
 	SELECT rolename,
@@ -104,7 +101,7 @@ func userAccounts(db *sql.DB) {
 	CASE WHEN rolcanlogin THEN 'YES' ELSE 'NO' END
 	FROM pg_roles ORDER BY rolcanlogin DESC;`
 
-	rows, err := db.Query(query)
+	rows, err := db.Query(context.Background(), query)
 	if err != nil {
 		fmt.Printf("Error querying database: %v", err)
 		return
@@ -119,7 +116,7 @@ func userAccounts(db *sql.DB) {
 	}
 }
 
-func dataAccessPermissions(db *sql.DB) {
+func dataAccessPermissions(db *pgxpool.Pool) {
 	password, err := utils.GetPassword()
 	if err != nil {
 		fmt.Println("Error Reading Password")
@@ -132,7 +129,7 @@ func dataAccessPermissions(db *sql.DB) {
 	FROM pg_database
 	WHERE datistemplate = false;`
 
-	drows, err := db.Query(query)
+	drows, err := db.Query(context.Background(), query)
 	if err != nil {
 		fmt.Printf("Error querying database: %v\n", err)
 		return
@@ -161,7 +158,7 @@ func dataAccessPermissions(db *sql.DB) {
 			OR r.rolsuper THEN 'YES' ELSE 'NO' END
 		FROM pg_roles r WHERE r.rolcanlogin = true;`
 
-		arows, err := db.Query(query)
+		arows, err := db.Query(context.Background(), query)
 		if err != nil {
 			continue
 		}
@@ -180,7 +177,7 @@ func dataAccessPermissions(db *sql.DB) {
 	}
 }
 
-func instanceInventory(db *sql.DB) {
+func instanceInventory(db *pgxpool.Pool) {
 	password, err := utils.GetPassword()
 	if err != nil {
 		fmt.Println("Error Reading Password")
@@ -193,7 +190,7 @@ func instanceInventory(db *sql.DB) {
 	FROM pg_database
 	WHERE datistemplate = false;`
 
-	drows, err := db.Query(query)
+	drows, err := db.Query(context.Background(), query)
 	if err != nil {
 		fmt.Printf("Error querying database: %v\n", err)
 		return
@@ -210,7 +207,7 @@ func instanceInventory(db *sql.DB) {
 		query = fmt.Sprintf("SELECT pg_size_pretty(pg_database_size('%s'));", dbName)
 
 		var dsize string
-		err = db.QueryRow(query).Scan(dsize)
+		err = db.QueryRow(context.Background(), query).Scan(dsize)
 		if err != nil {
 			fmt.Printf("  |-- Error querying %s: %v\n", dbName, err)
 			continue
@@ -228,7 +225,7 @@ func instanceInventory(db *sql.DB) {
 		FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE c.relkind = 'r' AND n.nspname = 'public' LIMIT 5;`
 
-		trows, err := db2.Query(query)
+		trows, err := db2.Query(context.Background(), query)
 		if err != nil {
 			continue
 		}
@@ -246,32 +243,36 @@ func instanceInventory(db *sql.DB) {
 	}
 }
 
-func connectToDatabase(username, password, host string, port int) (*sql.DB, error) {
+func connectToDatabase(username, password, host string, port int) (*pgxpool.Pool, error) {
 	return connectToDatabaseDB(username, password, host, port, "postgres")
 }
 
-func connectToDatabaseDB(username, password, host string, port int, dbname string) (*sql.DB, error) {
+func connectToDatabaseDB(username, password, host string, port int, dbname string) (*pgxpool.Pool, error) {
 	fmt.Printf("Connecting to database: '%s' at %s:%d", dbname, host, port)
 
 	userInfo := url.UserPassword(username, password)
 	dns := fmt.Sprintf("postgres://%s@%s:%d/%s?sslmode=disable", userInfo, host, port, dbname)
 
-	db, err := sql.Open("pgx", dns)
+	config, err := pgxpool.ParseConfig(dns)
 	if err != nil {
 		return nil, fmt.Errorf("Could not open connection: %w", err)
 	}
 
-	if err := db.Ping(); err != nil {
-		var netErr net.Error
-		if errors.As(err, &netErr) || strings.Contains(err.Error(), "connection refused") {
-			return nil, fmt.Errorf("Database not listening on %s:%d", host, port)
-		}
-		return nil, fmt.Errorf("Could not reach instance: %w", err)
-	}
-	db.SetConnMaxLifetime(time.Minute * 3)
-	db.SetMaxOpenConns(6)
+	config.MaxConns = 6
+	config.MaxConnLifetime = 8 * time.Minute
 
-	return db, nil
+	ctx := context.Background()
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("unable to create connetion pool: %w", err)
+	}
+
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("database unreachable or auth failed: %w", err)
+	}
+
+	return pool, nil
 }
 
 func runRestore() {
