@@ -109,7 +109,7 @@ func userAccounts(db *pgxpool.Pool) {
 	defer rows.Close()
 	for rows.Next() {
 		var rname, rsup, rnop, rlog string
-		if err := rows.Scan(&rname, rsup, rnop, rlog); err != nil {
+		if err := rows.Scan(&rname, &rsup, &rnop, &rlog); err != nil {
 			fmt.Printf("Error reading user: %v\n", err)
 			continue
 		}
