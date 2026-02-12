@@ -217,10 +217,11 @@ func instanceInventory(db *pgxpool.Pool) {
 			fmt.Printf("  |-- Error querying %s: %v\n", dbName, err)
 			continue
 		}
-		fmt.Printf("  |-- DATABASE: %s (SIZE: %s)", dbName, dsize)
+		fmt.Printf("  |-- DATABASE: %s (SIZE: %s)\n", dbName, dsize)
 
 		db2, err := connectToDatabaseDB(username, password, host, port, dbName, false)
 		if err != nil {
+			fmt.Printf("Error connecting for tables: %v\n", err)
 			continue
 		}
 		defer db2.Close()
@@ -232,6 +233,7 @@ func instanceInventory(db *pgxpool.Pool) {
 
 		trows, err := db2.Query(context.Background(), query)
 		if err != nil {
+			fmt.Printf("Error querying for tables: %v\n", err)
 			continue
 		}
 		defer trows.Close()
@@ -239,6 +241,7 @@ func instanceInventory(db *pgxpool.Pool) {
 		for trows.Next() {
 			var tname, tns, tsize string
 			if err := trows.Scan(&tname, &tns, &tsize); err != nil {
+				fmt.Printf("Error scanning for tables: %v\n", err)
 				continue
 			}
 			fmt.Printf("    |-- %-30s | Size: %s\n", tname, tsize)
