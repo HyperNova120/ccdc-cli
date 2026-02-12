@@ -153,7 +153,7 @@ func dataAccessPermissions(db *pgxpool.Pool) {
 		SELECT current_database(), r.rolname,
 		CASE WHEN has_database_privilege(r.rolname, current_database(), 'CONNECT') THEN 'YES' ELSE 'NO' END,
 		CASE WHEN EXISTS (SELECT 1 FROM information_schema.table_privileges
-			WHERE grantee = r.rolname AND privilege_type = 'SELECT'
+			WHERE grantee = r.rolname AND privilege_type = 'SELECT')
 			OR r.rolsuper THEN 'YES' ELSE 'NO' END,
 		CASE WHEN EXISTS (SELECT 1 FROM information_schema.table_privileges
 			WHERE grantee = r.rolname AND privilege_type IN ('INSERT','UPDATE','DELETE'))
