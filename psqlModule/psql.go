@@ -166,7 +166,7 @@ func dataAccessPermissions(db *pgxpool.Pool) {
 			continue
 		}
 		defer arows.Close()
-		fmt.Printf("  |-- DB: %s\n", dname)
+		fmt.Printf("  |-- Database: %s\n", dname)
 		for arows.Next() {
 			var dbName, uname, uconn, uread, uwrite string
 			if err := arows.Scan(&dbName, &uname, &uconn, &uread, &uwrite); err != nil {
@@ -174,7 +174,7 @@ func dataAccessPermissions(db *pgxpool.Pool) {
 				continue
 			}
 			if uconn == "YES" || uread == "YES" {
-				fmt.Printf("    |-- User: %-15s | Conn: %-3s | Read: %-3s | Write: %s\n", uname, uconn, uread, uwrite)
+				fmt.Printf("        |-- User: %-15s | Conn: %-3s | Read: %-3s | Write: %s\n", uname, uconn, uread, uwrite)
 			}
 		}
 		arows.Close()
