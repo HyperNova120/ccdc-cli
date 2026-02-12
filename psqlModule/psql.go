@@ -244,7 +244,7 @@ func instanceInventory(db *pgxpool.Pool) {
 				fmt.Printf("Error scanning for tables: %v\n", err)
 				continue
 			}
-			fmt.Printf("    |-- %-30s | Size: %s\n", tname, tsize)
+			fmt.Printf("        |-- %-35s | Size: %s\n", tname, tsize)
 		}
 		trows.Close()
 		db2.Close()
