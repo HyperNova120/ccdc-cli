@@ -212,7 +212,7 @@ func instanceInventory(db *pgxpool.Pool) {
 		query = fmt.Sprintf("SELECT pg_size_pretty(pg_database_size('%s'))::text;", dbName)
 
 		var dsize string
-		err = db.QueryRow(context.Background(), query).Scan(dsize)
+		err = db.QueryRow(context.Background(), query).Scan(&dsize)
 		if err != nil {
 			fmt.Printf("  |-- Error querying %s: %v\n", dbName, err)
 			continue
