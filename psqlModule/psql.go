@@ -113,7 +113,7 @@ func userAccounts(db *pgxpool.Pool) {
 			fmt.Printf("Error reading user: %v\n", err)
 			continue
 		}
-		fmt.Printf(" |-- %-25s | Super: %-3s | NoPass: %-3s | Login: %s\n", rname, rsup, rnop, rlog)
+		fmt.Printf(" |-- %-30s | Super: %-3s | NoPass: %-3s | Login: %s\n", rname, rsup, rnop, rlog)
 	}
 }
 
@@ -156,7 +156,7 @@ func dataAccessPermissions(db *pgxpool.Pool) {
 			WHERE grantee = r.rolname AND privilege_type = 'SELECT'
 			OR r.rolsuper THEN 'YES' ELSE 'NO' END,
 		CASE WHEN EXISTS (SELECT 1 FROM information_schema.table_privileges
-			WHERE grantee = r.rolname AND privilege_type IN ('INSERT','UPDATE','DELETE')
+			WHERE grantee = r.rolname AND privilege_type IN ('INSERT','UPDATE','DELETE'))
 			OR r.rolsuper THEN 'YES' ELSE 'NO' END
 		FROM pg_roles r WHERE r.rolcanlogin = true;`
 
