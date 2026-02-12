@@ -160,7 +160,7 @@ func dataAccessPermissions(db *pgxpool.Pool) {
 			OR r.rolsuper THEN 'YES' ELSE 'NO' END
 		FROM pg_roles r WHERE r.rolcanlogin = true;`
 
-		arows, err := db.Query(context.Background(), query)
+		arows, err := db2.Query(context.Background(), query)
 		if err != nil {
 			fmt.Printf("Error reading tables: %v\n", err)
 			continue
