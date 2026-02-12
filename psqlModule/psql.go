@@ -172,9 +172,9 @@ func dataAccessPermissions(db *pgxpool.Pool) {
 				fmt.Printf("Error scanning tables: %v\n", err)
 				continue
 			}
-			// if uconn == "YES" || uread == "YES" {
-			fmt.Printf("  |-- DB: %-15s | User: %-15s | Conn: %-3s | Read: %-3s | Write: %s\n", dbName, uname, uconn, uread, uwrite)
-			//}
+			if uconn == "YES" || uread == "YES" {
+				fmt.Printf("  |-- DB: %-15s | User: %-15s | Conn: %-3s | Read: %-3s | Write: %s\n", dbName, uname, uconn, uread, uwrite)
+			}
 		}
 		arows.Close()
 		db2.Close()
