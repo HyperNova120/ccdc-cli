@@ -113,7 +113,7 @@ func userAccounts(db *pgxpool.Pool) {
 			fmt.Printf("Error reading user: %v\n", err)
 			continue
 		}
-		fmt.Printf(" |-- %-30s | Super: %-3s | NoPass: %-3s | Login: %s\n", rname, rsup, rnop, rlog)
+		fmt.Printf("  |-- %-30s | Super: %-3s | NoPass: %-3s | Login: %s\n", rname, rsup, rnop, rlog)
 	}
 }
 
@@ -174,7 +174,7 @@ func dataAccessPermissions(db *pgxpool.Pool) {
 				continue
 			}
 			if uconn == "YES" || uread == "YES" {
-				fmt.Printf("  |-- User: %-15s | Conn: %-3s | Read: %-3s | Write: %s\n", uname, uconn, uread, uwrite)
+				fmt.Printf("    |-- User: %-15s | Conn: %-3s | Read: %-3s | Write: %s\n", uname, uconn, uread, uwrite)
 			}
 		}
 		arows.Close()
