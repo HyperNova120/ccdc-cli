@@ -227,7 +227,7 @@ func instanceInventory(db *pgxpool.Pool) {
 		defer db2.Close()
 
 		query = `
-		SELECT c.relname, n.nspname, pg_size_pretty(pg_total_relation_size(c.oid)::text
+		SELECT c.relname, n.nspname, pg_size_pretty(pg_total_relation_size(c.oid))::text
 		FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE c.relkind = 'r' AND n.nspname = 'public' LIMIT 5;`
 
