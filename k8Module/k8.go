@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
 	"ccdc-cli/utils"
@@ -87,7 +88,34 @@ func clusterTopologyAndNodes(clientset *kubernetes.Clientset, config *rest.Confi
 			n.Status.NodeInfo.KernelVersion,
 		)
 	}
-	return w.Flush()
+	w.Flush()
+
+	// 4. Node Pressure & Resource Warnings (Integrated Logic)
+	fmt.Printf("\n>>> Node Pressure & Resource Warnings\n")
+	foundPressure := false
+	for _, n := range nodes.Items {
+		var activePressures []string
+		for _, cond := range n.Status.Conditions {
+			// Logic: If status is "True" and it's NOT the "Ready" condition, it's a pressure flag
+			if cond.Status == "True" && cond.Type != "Ready" {
+				activePressures = append(activePressures, string(cond.Type))
+			}
+		}
+
+		if len(activePressures) > 0 {
+			if !foundPressure {
+				fmt.Println("[!] CRITICAL: Node Resource Pressure Detected:")
+				foundPressure = true
+			}
+			fmt.Printf("  - Node: %-22s Condition: %s\n", n.Name, strings.Join(activePressures, ", "))
+		}
+	}
+
+	if !foundPressure {
+		fmt.Println("[OK] No Node pressure flags detected.")
+	}
+
+	return nil
 }
 
 func getKubeConfig() (*rest.Config, error) {
