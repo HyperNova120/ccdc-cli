@@ -221,7 +221,6 @@ func podAndNetworkInventory(clientset *kubernetes.Clientset) error {
 
 func ingressAndExternalExposure(clientset *kubernetes.Clientset) error {
 	utils.PrintHeader("INGRESS & EXTERNAL EXPOSURE")
-	fmt.Printf(">>> L4 Services & Endpoints\n")
 
 	ctx := context.TODO()
 	services, err := clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{})
@@ -229,21 +228,18 @@ func ingressAndExternalExposure(clientset *kubernetes.Clientset) error {
 		return fmt.Errorf("failed to list services: %v", err)
 	}
 
-	// Use DiscoveryV1 instead of CoreV1 to get EndpointSlices
+	// Use EndpointSlices for modern k8s compatibility (standard in k3s/minikube)
 	slices, err := clientset.DiscoveryV1().EndpointSlices("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list endpoint slices: %v", err)
 	}
 
-	// Map Service Name to IPs using EndpointSlices
-	// EndpointSlices use a label 'kubernetes.io/service-name' to link to Services
+	// Map Service Name to IPs
 	epMap := make(map[string][]string)
 	for _, slice := range slices.Items {
 		svcName := slice.Labels["kubernetes.io/service-name"]
-		key := slice.Namespace + "/" + svcName
-
 		for _, endpoint := range slice.Endpoints {
-			epMap[key] = append(epMap[key], endpoint.Addresses...)
+			epMap[slice.Namespace+"/"+svcName] = append(epMap[slice.Namespace+"/"+svcName], endpoint.Addresses...)
 		}
 	}
 
@@ -252,26 +248,32 @@ func ingressAndExternalExposure(clientset *kubernetes.Clientset) error {
 
 	for _, s := range services.Items {
 		extIP := "<none>"
+
+		// 1. Check LoadBalancer Status (Works for k3s ServiceLB and Cloud LBs)
 		if len(s.Status.LoadBalancer.Ingress) > 0 {
-			extIP = s.Status.LoadBalancer.Ingress[0].IP
-			if extIP == "" {
+			if s.Status.LoadBalancer.Ingress[0].IP != "" {
+				extIP = s.Status.LoadBalancer.Ingress[0].IP
+			} else if s.Status.LoadBalancer.Ingress[0].Hostname != "" {
 				extIP = s.Status.LoadBalancer.Ingress[0].Hostname
 			}
 		}
 
+		// 2. Fallback to Spec External IPs (Common in manual Debian/k3s setups)
+		if extIP == "<none>" && len(s.Spec.ExternalIPs) > 0 {
+			extIP = s.Spec.ExternalIPs[0]
+		}
+
+		// 3. Fallback to ClusterIP so the column isn't just empty (Matches bash script intent)
+		if extIP == "<none>" && s.Spec.ClusterIP != "" && s.Spec.ClusterIP != "None" {
+			extIP = s.Spec.ClusterIP + " (Int)"
+		}
+
 		podIPs := strings.Join(epMap[s.Namespace+"/"+s.Name], ",")
-		if podIPs == "" {
-			podIPs = "None"
+		if len(podIPs) > 25 {
+			podIPs = podIPs[:22] + "..."
 		}
 
-		// Truncate for display
-		displayIPs := podIPs
-		if len(displayIPs) > 25 {
-			displayIPs = displayIPs[:22] + "..."
-		}
-
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			s.Namespace, s.Name, s.Spec.Type, extIP, displayIPs)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", s.Namespace, s.Name, s.Spec.Type, extIP, podIPs)
 	}
 	w.Flush()
 	return nil
