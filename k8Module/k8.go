@@ -49,6 +49,10 @@ func runCmd(cmd *cobra.Command, args []string) error {
 	securityAndVulnerabilityAudit(clientset)
 	storageInventory(clientset)
 	systemWarnings(clientset)
+	workloadInventory(clientset)
+	ingressInventory(clientset)
+	rbacAdminAudit(clientset)
+	apiDiscoveryAudit(clientset)
 	auditSummary(clientset)
 	return nil
 }
@@ -422,6 +426,134 @@ func systemWarnings(clientset *kubernetes.Clientset) error {
 	}
 
 	return nil
+}
+
+// --- 7. WORKLOAD BLUEPRINTS ---
+// Pods tell you what is running NOW. This tells you what is scheduled to stay running.
+func workloadInventory(clientset *kubernetes.Clientset) error {
+	utils.PrintHeader("WORKLOAD CONTROLLERS (BLUEPRINTS)")
+	ctx := context.TODO()
+
+	// Deployments
+	deps, err := clientset.AppsV1().Deployments("").List(ctx, metav1.ListOptions{})
+	if err == nil {
+		fmt.Printf(">>> Deployments\n")
+		w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+		fmt.Fprintf(w, "NAMESPACE\tNAME\tREPLICAS\tUP-TO-DATE\tAVAILABLE\n")
+		for _, d := range deps.Items {
+			fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\n", d.Namespace, d.Name, *d.Spec.Replicas, d.Status.UpdatedReplicas, d.Status.AvailableReplicas)
+		}
+		w.Flush()
+	}
+
+	// DaemonSets (Common for networking/logging agents)
+	dss, err := clientset.AppsV1().DaemonSets("").List(ctx, metav1.ListOptions{})
+	if err == nil {
+		fmt.Printf("\n>>> DaemonSets\n")
+		w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+		fmt.Fprintf(w, "NAMESPACE\tNAME\tDESIRED\tCURRENT\tREADY\n")
+		for _, ds := range dss.Items {
+			fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\n", ds.Namespace, ds.Name, ds.Status.DesiredNumberScheduled, ds.Status.CurrentNumberScheduled, ds.Status.NumberReady)
+		}
+		w.Flush()
+	}
+
+	// CronJobs (Hidden tasks that run on schedules)
+	cjs, err := clientset.BatchV1().CronJobs("").List(ctx, metav1.ListOptions{})
+	if err == nil && len(cjs.Items) > 0 {
+		fmt.Printf("\n>>> CronJobs\n")
+		w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+		fmt.Fprintf(w, "NAMESPACE\tNAME\tSCHEDULE\tSUSPEND\tLAST-RUN\n")
+		for _, cj := range cjs.Items {
+			lastRun := "<none>"
+			if cj.Status.LastScheduleTime != nil {
+				lastRun = cj.Status.LastScheduleTime.Time.Format("2006-01-02 15:04")
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%t\t%s\n", cj.Namespace, cj.Name, cj.Spec.Schedule, *cj.Spec.Suspend, lastRun)
+		}
+		w.Flush()
+	}
+	return nil
+}
+
+// --- 8. L7 INGRESS RULES ---
+// This tells you how URLs map to Services (Standard K8s Ingress)
+func ingressInventory(clientset *kubernetes.Clientset) error {
+	utils.PrintHeader("L7 INGRESS RULES")
+	ings, err := clientset.NetworkingV1().Ingresses("").List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		fmt.Println("  [!] Skip: Ingress API not accessible or no Ingresses found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+	fmt.Fprintf(w, "NAMESPACE\tNAME\tHOSTS\tADDRESS\tPORTS\n")
+	for _, ing := range ings.Items {
+		var hosts []string
+		for _, rule := range ing.Spec.Rules {
+			hosts = append(hosts, rule.Host)
+		}
+		addr := "<none>"
+		if len(ing.Status.LoadBalancer.Ingress) > 0 {
+			addr = ing.Status.LoadBalancer.Ingress[0].IP
+			if addr == "" {
+				addr = ing.Status.LoadBalancer.Ingress[0].Hostname
+			}
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t80,443\n", ing.Namespace, ing.Name, strings.Join(hosts, ","), addr)
+	}
+	w.Flush()
+	return nil
+}
+
+// --- 9. RBAC PRIVILEGE AUDIT ---
+// Finds the "Keys to the Kingdom"
+func rbacAdminAudit(clientset *kubernetes.Clientset) error {
+	utils.PrintHeader("RBAC PRIVILEGE AUDIT")
+	crbs, err := clientset.RbacV1().ClusterRoleBindings().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		fmt.Println("  [!] Skip: RBAC API not accessible (Insufficient Permissions).")
+		return nil
+	}
+
+	fmt.Println("Cluster-Admin Role Holders:")
+	found := false
+	for _, crb := range crbs.Items {
+		if crb.RoleRef.Name == "cluster-admin" {
+			for _, sub := range crb.Subjects {
+				fmt.Printf("  [!] DANGER: %s/%s (%s)\n", sub.Namespace, sub.Name, sub.Kind)
+				found = true
+			}
+		}
+	}
+	if !found {
+		fmt.Println("  [OK] No suspicious cluster-admin bindings detected.")
+	}
+	return nil
+}
+
+// --- 10. API DISCOVERY ---
+// Tells you what capabilities this cluster has (Cilium, Istio, etc.)
+func apiDiscoveryAudit(clientset *kubernetes.Clientset) {
+	utils.PrintHeader("API CAPABILITIES & EXTENSIONS")
+	groups, err := clientset.Discovery().ServerGroups()
+	if err != nil {
+		fmt.Println("  [!] Failed to discover API groups.")
+		return
+	}
+
+	fmt.Printf("Detected API Groups (%d total):\n", len(groups.Groups))
+	var detected []string
+	for _, g := range groups.Groups {
+		// Just pull the short names for scannability
+		name := g.Name
+		if name == "" {
+			name = "core"
+		}
+		detected = append(detected, name)
+	}
+	// Print in a compact list
+	fmt.Println("  " + strings.Join(detected, " | "))
 }
 
 func auditSummary(clientset *kubernetes.Clientset) error {
