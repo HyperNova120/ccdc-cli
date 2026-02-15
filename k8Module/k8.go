@@ -221,34 +221,29 @@ func podAndNetworkInventory(clientset *kubernetes.Clientset) error {
 
 func ingressAndExternalExposure(clientset *kubernetes.Clientset) error {
 	utils.PrintHeader("INGRESS & EXTERNAL EXPOSURE")
-	// --- Section: L4 Services & Endpoints ---
 	fmt.Printf(">>> L4 Services & Endpoints\n")
 
 	ctx := context.TODO()
-	// Fetch both sets of data at once
 	services, err := clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list services: %v", err)
 	}
 
-	endpoints, err := clientset.CoreV1().Endpoints("").List(ctx, metav1.ListOptions{})
+	// Use DiscoveryV1 instead of CoreV1 to get EndpointSlices
+	slices, err := clientset.DiscoveryV1().EndpointSlices("").List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to list endpoints: %v", err)
+		return fmt.Errorf("failed to list endpoint slices: %v", err)
 	}
 
-	// Create a map of endpoints for O(1) lookup: key = namespace/name
-	epMap := make(map[string]string)
-	for _, ep := range endpoints.Items {
-		var ips []string
-		for _, subset := range ep.Subsets {
-			for _, addr := range subset.Addresses {
-				ips = append(ips, addr.IP)
-			}
-		}
-		if len(ips) > 0 {
-			epMap[ep.Namespace+"/"+ep.Name] = strings.Join(ips, ",")
-		} else {
-			epMap[ep.Namespace+"/"+ep.Name] = "None"
+	// Map Service Name to IPs using EndpointSlices
+	// EndpointSlices use a label 'kubernetes.io/service-name' to link to Services
+	epMap := make(map[string][]string)
+	for _, slice := range slices.Items {
+		svcName := slice.Labels["kubernetes.io/service-name"]
+		key := slice.Namespace + "/" + svcName
+
+		for _, endpoint := range slice.Endpoints {
+			epMap[key] = append(epMap[key], endpoint.Addresses...)
 		}
 	}
 
@@ -256,7 +251,6 @@ func ingressAndExternalExposure(clientset *kubernetes.Clientset) error {
 	fmt.Fprintf(w, "NAMESPACE\tSERVICE\tTYPE\tEXTERNAL-IP\tTARGET-POD-IPS\n")
 
 	for _, s := range services.Items {
-		// Handle External IP (LoadBalancer)
 		extIP := "<none>"
 		if len(s.Status.LoadBalancer.Ingress) > 0 {
 			extIP = s.Status.LoadBalancer.Ingress[0].IP
@@ -265,22 +259,21 @@ func ingressAndExternalExposure(clientset *kubernetes.Clientset) error {
 			}
 		}
 
-		// Pull from our pre-fetched endpoint map
-		podIPs := epMap[s.Namespace+"/"+s.Name]
+		podIPs := strings.Join(epMap[s.Namespace+"/"+s.Name], ",")
 		if podIPs == "" {
 			podIPs = "None"
 		}
 
-		// Truncate long Pod IP lists for table readability
-		if len(podIPs) > 25 {
-			podIPs = podIPs[:22] + "..."
+		// Truncate for display
+		displayIPs := podIPs
+		if len(displayIPs) > 25 {
+			displayIPs = displayIPs[:22] + "..."
 		}
 
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			s.Namespace, s.Name, s.Spec.Type, extIP, podIPs)
+			s.Namespace, s.Name, s.Spec.Type, extIP, displayIPs)
 	}
 	w.Flush()
-
 	return nil
 }
 
