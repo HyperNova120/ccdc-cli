@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"ccdc-cli/k8Module"
 	"ccdc-cli/mysqlModule"
 	"ccdc-cli/psqlModule"
 
@@ -18,6 +19,7 @@ var rootCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(mysqlModule.GetmysqlCmd())
 	rootCmd.AddCommand(psqlModule.GetpsqlCmd())
+	rootCmd.AddCommand(k8Module.Getk8Cmd())
 }
 
 func Execute() {
