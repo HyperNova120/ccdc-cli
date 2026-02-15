@@ -11,6 +11,7 @@ import (
 	"ccdc-cli/utils"
 
 	"github.com/spf13/cobra"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -43,7 +44,7 @@ func runCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	clusterTopologyAndNodes(clientset, config)
-
+	podAndNetworkInventory(clientset)
 	return nil
 }
 
@@ -113,6 +114,101 @@ func clusterTopologyAndNodes(clientset *kubernetes.Clientset, config *rest.Confi
 
 	if !foundPressure {
 		fmt.Println("[OK] No Node pressure flags detected.")
+	}
+
+	return nil
+}
+
+func podAndNetworkInventory(clientset *kubernetes.Clientset) error {
+	utils.PrintHeader("POD & NETWORK INVENTORY")
+	// Fetch all pods once to avoid expensive API calls in a loop
+	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list pods: %v", err)
+	}
+
+	// --- Section: Pod-to-Node Mapping ---
+	fmt.Printf(">>> Pod-to-Node Mapping\n")
+	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+	fmt.Fprintf(w, "NAMESPACE\tPOD-NAME\tPOD-IP\tNODE-IP\tSTATUS\n")
+
+	for _, p := range pods.Items {
+		podIP := p.Status.PodIP
+		if podIP == "" {
+			podIP = "<none>"
+		}
+		hostIP := p.Status.HostIP
+		if hostIP == "" {
+			hostIP = "<none>"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			p.Namespace, p.Name, podIP, hostIP, p.Status.Phase)
+	}
+	w.Flush()
+
+	// --- Section: Pod Health & Error Analytics ---
+	fmt.Printf("\n>>> Pod Health & Error Analytics\n")
+	foundErrors := false
+
+	for _, p := range pods.Items {
+		// Replicate grep -vE "Running|Completed"
+		if p.Status.Phase == corev1.PodRunning || p.Status.Phase == corev1.PodSucceeded {
+			continue
+		}
+
+		if !foundErrors {
+			fmt.Printf("  %-45s %-20s %-50s\n", "POD (NS/NAME)", "REASON", "MESSAGE")
+			foundErrors = true
+		}
+
+		var reason, message string
+		podFullName := fmt.Sprintf("%s/%s", p.Namespace, p.Name)
+
+		// 1. Check Container States (Waiting/Terminated)
+		containerFound := false
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.State.Waiting != nil {
+				reason = cs.State.Waiting.Reason
+				message = cs.State.Waiting.Message
+				containerFound = true
+				break
+			} else if cs.State.Terminated != nil {
+				reason = cs.State.Terminated.Reason
+				message = cs.State.Terminated.Message
+				containerFound = true
+				break
+			}
+		}
+
+		// 2. Fallback to Scheduling Issues (matches your shell logic)
+		if !containerFound {
+			reason = "Scheduling"
+			for _, cond := range p.Status.Conditions {
+				if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse {
+					message = cond.Message
+					break
+				}
+			}
+		}
+
+		// Clean up empty strings
+		if reason == "" {
+			reason = "Unknown"
+		}
+		if message == "" {
+			message = "No diagnostic message"
+		}
+
+		// Truncate message for display like your shell script's %.70s
+		if len(message) > 70 {
+			message = message[:67] + "..."
+		}
+
+		fmt.Printf("  %-45s %-20s %-50s\n", podFullName, reason, message)
+	}
+
+	if !foundErrors {
+		fmt.Println("[OK] All pods are healthy (Running/Completed).")
 	}
 
 	return nil
