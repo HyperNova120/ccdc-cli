@@ -30,15 +30,25 @@ var (
 
 func Getk8Cmd() *cobra.Command {
 	k8Cmd := &cobra.Command{
-		Use:          "k8",
-		Short:        "Module to Inventory Kubernetes",
+		Use:   "k8",
+		Short: "Module to Inventory Kubernetes",
+		Long: `
+
+Secret Rotation Info:
+
+NAME      - secret name
+NAMESPACE - namespace to rotate the secret in
+KEY       - a key within a kubernetes secret that will be modified
+STRATEGY  - new value creation strategy. (supported values are retainPrev, omitPrev), retainPrev will save off
+            an old value in the key within the same secret, appending _PREV to the name of the key. If omitPrev
+            is specified, the old value is not saved`,
 		RunE:         runCmd,
 		SilenceUsage: true,
 	}
 
 	k8Cmd.Flags().BoolVarP(&inventory, "inventory", "i", false, "Should Run Inventory")
 	k8Cmd.Flags().BoolVarP(&rollCreds, "roll", "r", false, "Should Run Roll Credentials")
-	k8Cmd.Flags().StringVarP(&credSequences, "sequences", "s", "", "SECRET_NAME,NAMESAPCE,KEY,STRATEGY[|SECRET_NAME,NAMESPACE,KEY,STRATEGY]")
+	k8Cmd.Flags().StringVarP(&credSequences, "sequences", "s", "", "SECRET_NAME,NAMESPACE,KEY,STRATEGY[|SECRET_NAME,NAMESPACE,KEY,STRATEGY]")
 	return k8Cmd
 }
 
