@@ -71,7 +71,7 @@ func runCmd(cmd *cobra.Command, args []string) error {
 		flagFound = true
 	}
 
-	if cmd.Flags().Changed("rollCreds") {
+	if cmd.Flags().Changed("roll") {
 		if credSequences == "" {
 			fmt.Println("-r flag requires -s to be properly set")
 			return nil
@@ -121,7 +121,7 @@ func rollCredentials(clientset *kubernetes.Clientset, config *rest.Config) {
 		secret := secretDef{name: parts[0], namespace: parts[1], key: parts[2], strategy: parts[3]}
 		secretDefs = append(secretDefs, secret)
 
-		fmt.Printf("Rotating secret `%s` in the namespace of `%s`", secret.name, secret.namespace)
+		fmt.Printf("Rotating secret `%s` in the namespace of `%s`\n", secret.name, secret.namespace)
 	}
 	rotate(clientset, config, secretDefs)
 }
@@ -168,7 +168,7 @@ func rotate(clientset *kubernetes.Clientset, config *rest.Config, secretDefs []s
 			if err != nil {
 				fmt.Printf("Failed to create secret: %s\n", err)
 			} else {
-				fmt.Printf("Updated Secret %s.%s->%s with new value: %s", secretDefs[i].namespace, secretDefs[i].name, secretDefs[i].key, string(newValue))
+				fmt.Printf("Updated Secret %s.%s->%s with new value: %s\n", secretDefs[i].namespace, secretDefs[i].name, secretDefs[i].key, string(newValue))
 			}
 		} else {
 			if secret == nil {
@@ -176,7 +176,7 @@ func rotate(clientset *kubernetes.Clientset, config *rest.Config, secretDefs []s
 				continue
 			}
 			currrentValue, _ := b64.StdEncoding.DecodeString(string(secret.Data[secretDefs[i].key]))
-			fmt.Printf("Current value of the secret %s.%s->%s is %s", secretDefs[i].namespace, secretDefs[i].name, secretDefs[i].key, string(currrentValue))
+			fmt.Printf("Current value of the secret %s.%s->%s is %s\n", secretDefs[i].namespace, secretDefs[i].name, secretDefs[i].key, string(currrentValue))
 			if secretDefs[i].strategy == "retainPrev" {
 				secret.Data[secretDefs[i].key+"_PREV"] = secret.Data[secretDefs[i].key]
 			}
@@ -186,7 +186,7 @@ func rotate(clientset *kubernetes.Clientset, config *rest.Config, secretDefs []s
 			if err != nil {
 				fmt.Printf("Failed to update secret: %v\n", err)
 			} else {
-				fmt.Printf("Updated Secret %s.%s->%s with new value: %s", secretDefs[i].namespace, secretDefs[i].name, secretDefs[i].key, string(newValue))
+				fmt.Printf("Updated Secret %s.%s->%s with new value: %s\n", secretDefs[i].namespace, secretDefs[i].name, secretDefs[i].key, string(newValue))
 			}
 
 		}
