@@ -90,7 +90,7 @@ func secretInventory(clientset *kubernetes.Clientset) {
 
 	for _, ns := range namespaces.Items {
 		if ns.Name == "kube-system" || ns.Name == "kube-public" {
-			fmt.Printf("[!] System Namespace: %s\n", ns.Name)
+			fmt.Printf("%-35s [SYSTEM NAMESPACE]\n", ns.Name)
 		} else {
 			fmt.Printf("%s\n", ns.Name)
 		}
@@ -107,7 +107,7 @@ func secretInventory(clientset *kubernetes.Clientset) {
 }
 
 func getSecretTag(secret corev1.Secret) any {
-	if secret.Name == "kube-system" || strings.HasPrefix(secret.Name, "sh.heml") {
+	if secret.Name == "kube-system" || strings.HasPrefix(secret.Name, "sh.helm") {
 		return "[SYSTEM: SKIP]"
 	}
 
