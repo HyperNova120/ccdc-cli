@@ -2,11 +2,14 @@ package k8Module
 
 import (
 	"context"
+	b64 "encoding/base64"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"ccdc-cli/utils"
 
@@ -20,8 +23,9 @@ import (
 )
 
 var (
-	inventory bool
-	rollCreds bool
+	inventory     bool
+	rollCreds     bool
+	credSequences string
 )
 
 func Getk8Cmd() *cobra.Command {
@@ -34,6 +38,7 @@ func Getk8Cmd() *cobra.Command {
 
 	k8Cmd.Flags().BoolVarP(&inventory, "inventory", "i", false, "Should Run Inventory")
 	k8Cmd.Flags().BoolVarP(&rollCreds, "roll", "r", false, "Should Run Roll Credentials")
+	k8Cmd.Flags().StringVarP(&credSequences, "sequences", "s", "", "SECRET_NAME,NAMESAPCE,KEY,STRATEGY[|SECRET_NAME,NAMESPACE,KEY,STRATEGY]")
 	return k8Cmd
 }
 
@@ -55,28 +60,143 @@ func runCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	if cmd.Flags().Changed("rollCreds") {
+		if credSequences == "" {
+			fmt.Println("-r flag requires -s to be properly set")
+			return nil
+		}
 		rollCredentials(clientset, config)
 	}
 	return nil
 }
 
-func rollCredentials(clientset *kubernetes.Clientset, config *rest.Config) {
-	panic("unimplemented")
+// ===============================================
+//
+//				  CREDENTIAL ROLLING CODE
+//	CODE PULLED FROM: https://github.com/alexlokshin/kube-secret-rotator/tree/master
+//
+// ===============================================
+type secretDef struct {
+	name      string
+	namespace string
+	key       string
+	strategy  string
 }
 
+var chars = []rune("01234567890$%#!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func rollCredentials(clientset *kubernetes.Clientset, config *rest.Config) {
+	secretDefs := []secretDef{}
+	fmt.Printf("Kubernetes Secret Rotator\n")
+
+	sequences := strings.Split(credSequences, "|")
+	if len(sequences) < 1 {
+		fmt.Println("At least one secret sequence has to be specified.")
+		return
+	}
+
+	for i := 0; i < len(sequences); i++ {
+		parts := strings.Split(sequences[i], ",")
+		if len(parts) != 4 {
+			fmt.Println("Invalid specification for the secret. Valid response is SECRET_NAME,NAMESPACE,KEY,STRATEGY. For Example: tempsecret,defualt,somekey,retainPrev")
+			return
+
+		}
+		secret := secretDef{name: parts[0], namespace: parts[1], key: parts[2], strategy: parts[3]}
+		secretDefs = append(secretDefs, secret)
+
+		fmt.Printf("Rotating secret `%s` in the namespace of `%s`", secret.name, secret.namespace)
+	}
+	rotate(clientset, config, secretDefs)
+}
+
+func rotate(clientset *kubernetes.Clientset, config *rest.Config, secretDefs []secretDef) {
+	for i := 0; i < len(secretDefs); i++ {
+		_, err := clientset.CoreV1().Namespaces().Get(context.TODO(), secretDefs[i].namespace, metav1.GetOptions{})
+		if err != nil {
+			fmt.Printf("Cannot get the namespace %s: skipping secret creation for now.\n", secretDefs[i].namespace)
+			continue
+
+		}
+
+		secret, err := clientset.CoreV1().Secrets(secretDefs[i].namespace).Get(context.TODO(), secretDefs[i].name, metav1.GetOptions{})
+
+		fmt.Printf("Rotating secret %s.%s\n", secretDefs[i].namespace, secretDefs[i].name)
+
+		newValue := ([]byte)(randomizeString(40))
+		t := time.Now()
+
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			dataMap := make(map[string][]byte)
+			if secretDefs[i].strategy == "retainPrev" {
+				dataMap[secretDefs[i].key+"_PREV"] = newValue
+			}
+			dataMap[secretDefs[i].key] = newValue
+
+			annotations := make(map[string]string)
+			annotations["kube-secret-rotator/rotated"] = t.Format(time.RFC850)
+
+			secret = &corev1.Secret{
+				Type: corev1.SecretTypeOpaque,
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        secretDefs[i].name,
+					Namespace:   secretDefs[i].namespace,
+					Annotations: annotations,
+				},
+				Data: dataMap,
+			}
+
+			fmt.Printf("Secret %s.%s doesn't exist. Creating.\n", secretDefs[i].namespace, secretDefs[i].name)
+			_, err = clientset.CoreV1().Secrets(secretDefs[i].namespace).Create(context.TODO(), secret, metav1.CreateOptions{})
+			if err != nil {
+				fmt.Printf("Failed to create secret: %s\n", err)
+			}
+		} else {
+			if secret == nil {
+				fmt.Printf("No Existing secret found.\n")
+				continue
+			}
+			currrentValue, _ := b64.StdEncoding.DecodeString(string(secret.Data[secretDefs[i].key]))
+			fmt.Printf("Current value of the secret %s.%s->%s is %s", secretDefs[i].namespace, secretDefs[i].name, secretDefs[i].key, string(currrentValue))
+			if secretDefs[i].strategy == "retainPrev" {
+				secret.Data[secretDefs[i].key+"_PREV"] = secret.Data[secretDefs[i].key]
+			}
+			secret.Data[secretDefs[i].key] = newValue
+			secret.Annotations["Kube-secret-rotator/rotated"] = t.Format(time.RFC850)
+			_, err = clientset.CoreV1().Secrets(secretDefs[i].namespace).Update(context.TODO(), secret, metav1.UpdateOptions{})
+			if err != nil {
+				fmt.Printf("Failed to update secret: %v\n", err)
+			}
+
+		}
+	}
+}
+
+func randomizeString(i int) string {
+	byteArray := make([]rune, i)
+	for i := range byteArray {
+		byteArray[i] = chars[rand.IntN(len(chars))]
+	}
+	return strings.Replace(b64.StdEncoding.EncodeToString([]byte(string(byteArray))), "=", "", -1)
+}
+
+//===============================================
+//							INVENTORY CODE
+//===============================================
+
 func runInventory(clientset *kubernetes.Clientset, config *rest.Config) {
-	clusterTopologyAndNodes(clientset, config)
-	podAndNetworkInventory(clientset)
+	_ = clusterTopologyAndNodes(clientset, config)
+	_ = podAndNetworkInventory(clientset)
 	secretInventory(clientset)
-	ingressAndExternalExposure(clientset)
-	securityAndVulnerabilityAudit(clientset)
-	storageInventory(clientset)
-	systemWarnings(clientset)
-	workloadInventory(clientset)
-	ingressInventory(clientset)
-	rbacAdminAudit(clientset)
+	_ = ingressAndExternalExposure(clientset)
+	_ = securityAndVulnerabilityAudit(clientset)
+	_ = storageInventory(clientset)
+	_ = systemWarnings(clientset)
+	_ = workloadInventory(clientset)
+	_ = ingressInventory(clientset)
+	_ = rbacAdminAudit(clientset)
 	apiDiscoveryAudit(clientset)
-	auditSummary(clientset)
+	_ = auditSummary(clientset)
 }
 
 func secretInventory(clientset *kubernetes.Clientset) {
