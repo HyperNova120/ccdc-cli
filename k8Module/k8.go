@@ -59,6 +59,7 @@ func runCmd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	flagFound := false
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		fmt.Printf("Error creating client set: %v\n", err)
@@ -67,6 +68,7 @@ func runCmd(cmd *cobra.Command, args []string) error {
 
 	if cmd.Flags().Changed("inventory") {
 		runInventory(clientset, config)
+		flagFound = true
 	}
 
 	if cmd.Flags().Changed("rollCreds") {
@@ -75,6 +77,11 @@ func runCmd(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		rollCredentials(clientset, config)
+		flagFound = true
+	}
+
+	if !flagFound {
+		fmt.Println("This subcommand requires -i or -r to be set")
 	}
 	return nil
 }
@@ -160,6 +167,8 @@ func rotate(clientset *kubernetes.Clientset, config *rest.Config, secretDefs []s
 			_, err = clientset.CoreV1().Secrets(secretDefs[i].namespace).Create(context.TODO(), secret, metav1.CreateOptions{})
 			if err != nil {
 				fmt.Printf("Failed to create secret: %s\n", err)
+			} else {
+				fmt.Printf("Updated Secret %s.%s->%s with new value: %s", secretDefs[i].namespace, secretDefs[i].name, secretDefs[i].key, string(newValue))
 			}
 		} else {
 			if secret == nil {
@@ -176,6 +185,8 @@ func rotate(clientset *kubernetes.Clientset, config *rest.Config, secretDefs []s
 			_, err = clientset.CoreV1().Secrets(secretDefs[i].namespace).Update(context.TODO(), secret, metav1.UpdateOptions{})
 			if err != nil {
 				fmt.Printf("Failed to update secret: %v\n", err)
+			} else {
+				fmt.Printf("Updated Secret %s.%s->%s with new value: %s", secretDefs[i].namespace, secretDefs[i].name, secretDefs[i].key, string(newValue))
 			}
 
 		}
@@ -232,6 +243,12 @@ func secretInventory(clientset *kubernetes.Clientset) {
 		}
 		for _, secret := range secrets.Items {
 			fmt.Printf("  |-- %-35s %s\n", secret.Name, getSecretTag(secret))
+
+			if getSecretTag(secret) == "[OPAQUE: ROTATE]" {
+				for key := range secret.Data {
+					fmt.Printf("    |-- Key: %s\n", key)
+				}
+			}
 		}
 	}
 }
