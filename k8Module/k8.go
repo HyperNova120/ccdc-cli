@@ -19,6 +19,11 @@ import (
 	"k8s.io/client-go/util/homedir"
 )
 
+var (
+	inventory bool
+	rollCreds bool
+)
+
 func Getk8Cmd() *cobra.Command {
 	k8Cmd := &cobra.Command{
 		Use:          "k8",
@@ -27,6 +32,8 @@ func Getk8Cmd() *cobra.Command {
 		SilenceUsage: true,
 	}
 
+	k8Cmd.Flags().BoolVarP(&inventory, "inventory", "i", false, "Should Run Inventory")
+	k8Cmd.Flags().BoolVarP(&rollCreds, "roll", "r", false, "Should Run Roll Credentials")
 	return k8Cmd
 }
 
@@ -43,8 +50,24 @@ func runCmd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if cmd.Flags().Changed("inventory") {
+		runInventory(clientset, config)
+	}
+
+	if cmd.Flags().Changed("rollCreds") {
+		rollCredentials(clientset, config)
+	}
+	return nil
+}
+
+func rollCredentials(clientset *kubernetes.Clientset, config *rest.Config) {
+	panic("unimplemented")
+}
+
+func runInventory(clientset *kubernetes.Clientset, config *rest.Config) {
 	clusterTopologyAndNodes(clientset, config)
 	podAndNetworkInventory(clientset)
+	secretInventory(clientset)
 	ingressAndExternalExposure(clientset)
 	securityAndVulnerabilityAudit(clientset)
 	storageInventory(clientset)
@@ -54,7 +77,33 @@ func runCmd(cmd *cobra.Command, args []string) error {
 	rbacAdminAudit(clientset)
 	apiDiscoveryAudit(clientset)
 	auditSummary(clientset)
-	return nil
+}
+
+func secretInventory(clientset *kubernetes.Clientset) {
+	utils.PrintHeader("Cluster Secrets")
+
+	namespaces, err := clientset.CoreV1().Namespaces().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		fmt.Printf("Could not list namespaces: %v\n", err)
+		return
+	}
+
+	for _, ns := range namespaces.Items {
+		if ns.Name == "kube-system" || ns.Name == "kube-public" {
+			fmt.Printf("[!] System Namespace: %s\n", ns.Name)
+		} else {
+			fmt.Printf("%s\n", ns.Name)
+		}
+
+		secrets, err := clientset.CoreV1().Secrets(ns.Name).List(context.TODO(), metav1.ListOptions{})
+		if err != nil {
+			fmt.Printf("Could not get secrets for namspace %s: %v\n", ns.Name, err)
+			continue
+		}
+		for _, secret := range secrets.Items {
+			fmt.Printf("  |-- %s\n", secret.Name)
+		}
+	}
 }
 
 func clusterTopologyAndNodes(clientset *kubernetes.Clientset, config *rest.Config) error {
@@ -607,8 +656,11 @@ func getKubeConfig() (*rest.Config, error) {
 			kubeconfig = defaultPath
 		} else {
 			k3sDefault := "/etc/rancher/k3s/k3s.yaml"
+			kubeadmDefault := "/etc/kubernetes/admin.conf"
 			if _, err := os.Stat(k3sDefault); err == nil {
 				kubeconfig = k3sDefault
+			} else if _, err := os.Stat(kubeadmDefault); err != nil {
+				kubeconfig = kubeadmDefault
 			}
 		}
 	}
