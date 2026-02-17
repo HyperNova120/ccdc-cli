@@ -101,9 +101,25 @@ func secretInventory(clientset *kubernetes.Clientset) {
 			continue
 		}
 		for _, secret := range secrets.Items {
-			fmt.Printf("  |-- %s\n", secret.Name)
+			fmt.Printf("  |-- %-35s %s\n", secret.Name, getSecretTag(secret))
 		}
 	}
+}
+
+func getSecretTag(secret corev1.Secret) any {
+	if secret.Name == "kube-system" || strings.HasPrefix(secret.Name, "sh.heml") {
+		return "[SYSTEM: SKIP]"
+	}
+
+	if secret.Type == corev1.SecretTypeServiceAccountToken || secret.Type == corev1.SecretTypeTLS {
+		return "[INFRA: SKIP]"
+	}
+
+	if secret.Type == corev1.SecretTypeOpaque {
+		return "[OPAQUE: ROTATE]"
+	}
+
+	return "[OTHER]"
 }
 
 func clusterTopologyAndNodes(clientset *kubernetes.Clientset, config *rest.Config) error {
