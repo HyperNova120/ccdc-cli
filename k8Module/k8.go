@@ -231,9 +231,9 @@ func secretInventory(clientset *kubernetes.Clientset) {
 
 	for _, ns := range namespaces.Items {
 		if ns.Name == "kube-system" || ns.Name == "kube-public" {
-			fmt.Printf("%-35s [SYSTEM NAMESPACE]\n", ns.Name)
+			fmt.Printf("  |-- %-35s [SYSTEM NAMESPACE]\n", ns.Name)
 		} else {
-			fmt.Printf("%s\n", ns.Name)
+			fmt.Printf("  |-- %s\n", ns.Name)
 		}
 
 		secrets, err := clientset.CoreV1().Secrets(ns.Name).List(context.TODO(), metav1.ListOptions{})
@@ -242,13 +242,13 @@ func secretInventory(clientset *kubernetes.Clientset) {
 			continue
 		}
 		for _, secret := range secrets.Items {
-			fmt.Printf("  |-- %-35s %s\n", secret.Name, getSecretTag(secret))
+			fmt.Printf("    |-- %-35s %s\n", secret.Name, getSecretTag(secret))
 
 			if getSecretTag(secret) == "[OPAQUE: ROTATE]" {
 				for key, valueBytes := range secret.Data {
-					fmt.Printf("    |-- Key: %s\n", key)
+					fmt.Printf("      |-- Key: %s\n", key)
 					keyValue := string(valueBytes)
-					fmt.Printf("      |-- Value: \n%s\n      |-- END VALUE\n", keyValue)
+					fmt.Printf("        |-- Value: \n%s\n        |-- END VALUE\n", keyValue)
 				}
 			}
 		}
