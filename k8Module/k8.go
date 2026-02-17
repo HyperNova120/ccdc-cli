@@ -245,8 +245,10 @@ func secretInventory(clientset *kubernetes.Clientset) {
 			fmt.Printf("  |-- %-35s %s\n", secret.Name, getSecretTag(secret))
 
 			if getSecretTag(secret) == "[OPAQUE: ROTATE]" {
-				for key := range secret.Data {
+				for key, valueBytes := range secret.Data {
 					fmt.Printf("    |-- Key: %s\n", key)
+					keyValue := string(valueBytes)
+					fmt.Printf("      |-- Value: \n%s\n      |-- END VALUE\n", keyValue)
 				}
 			}
 		}
