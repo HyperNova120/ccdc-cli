@@ -368,3 +368,56 @@ func runBackup() {
 
 	fmt.Printf("Created Backup: %s\n", file)
 }
+
+// ===========================================================
+//
+//	PROGRAMMATIC ENTRY POINTS (used by the TUI)
+//
+// ===========================================================
+
+// RunInventoryCapture runs the full PostgreSQL inventory against the given
+// target and returns everything it would normally print to stdout as a
+// single string. Resets the cached password afterward so it can't leak
+// into a later call against a different target.
+func RunInventoryCapture(targetHost string, targetPort int, targetUser string, password string) (string, error) {
+	host = targetHost
+	port = targetPort
+	username = targetUser
+	utils.SetPassword(password)
+	defer utils.ResetPassword()
+
+	return utils.CaptureStdout(func() {
+		runInventory()
+	})
+}
+
+// RunBackupCapture runs a full pg_dumpall-based backup to filePath and
+// returns everything it would normally print to stdout.
+func RunBackupCapture(targetHost string, targetPort int, targetUser string, password string, filePath string) (string, error) {
+	host = targetHost
+	port = targetPort
+	username = targetUser
+	file = filePath
+	utils.SetPassword(password)
+	defer utils.ResetPassword()
+
+	return utils.CaptureStdout(func() {
+		runBackup()
+	})
+}
+
+// RunRestoreCapture restores from filePath and returns everything it
+// would normally print to stdout. This is destructive - callers (like the
+// TUI) should confirm with the user before invoking it.
+func RunRestoreCapture(targetHost string, targetPort int, targetUser string, password string, filePath string) (string, error) {
+	host = targetHost
+	port = targetPort
+	username = targetUser
+	file = filePath
+	utils.SetPassword(password)
+	defer utils.ResetPassword()
+
+	return utils.CaptureStdout(func() {
+		runRestore()
+	})
+}

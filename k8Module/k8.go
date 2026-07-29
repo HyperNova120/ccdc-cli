@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -26,6 +27,7 @@ var (
 	inventory     bool
 	rollCreds     bool
 	credSequences string
+	revealSecrets bool
 )
 
 func Getk8Cmd() *cobra.Command {
@@ -49,6 +51,7 @@ STRATEGY  - new value creation strategy. (supported values are retainPrev, omitP
 	k8Cmd.Flags().BoolVarP(&inventory, "inventory", "i", false, "Should Run Inventory")
 	k8Cmd.Flags().BoolVarP(&rollCreds, "roll", "r", false, "Should Run Roll Credentials")
 	k8Cmd.Flags().StringVarP(&credSequences, "sequences", "s", "", "SECRET_NAME,NAMESPACE,KEY,STRATEGY[|SECRET_NAME,NAMESPACE,KEY,STRATEGY]")
+	k8Cmd.Flags().BoolVar(&revealSecrets, "reveal", false, "Print secret values in plaintext instead of redacted (use with care - shoulder surfing/logging risk)")
 	return k8Cmd
 }
 
@@ -128,67 +131,92 @@ func rollCredentials(clientset *kubernetes.Clientset, config *rest.Config) {
 
 func rotate(clientset *kubernetes.Clientset, config *rest.Config, secretDefs []secretDef) {
 	for i := 0; i < len(secretDefs); i++ {
-		_, err := clientset.CoreV1().Namespaces().Get(context.TODO(), secretDefs[i].namespace, metav1.GetOptions{})
-		if err != nil {
-			fmt.Printf("Cannot get the namespace %s: skipping secret creation for now.\n", secretDefs[i].namespace)
-			continue
+		newValue := ([]byte)(randomizeString(40))
+		rotateSecret(clientset, secretDefs[i], newValue)
+	}
+}
 
+// rotateSecret rotates exactly one secret key to newValue, creating the
+// secret if it doesn't exist yet. This is the single source of truth for
+// rotation logic - both the CLI's multi-sequence rotate() above and the
+// TUI's single-secret RotateSecretValueCapture below call into this so
+// they can't drift apart on behavior.
+func rotateSecret(clientset *kubernetes.Clientset, def secretDef, newValue []byte) {
+	_, err := clientset.CoreV1().Namespaces().Get(context.TODO(), def.namespace, metav1.GetOptions{})
+	if err != nil {
+		fmt.Printf("Cannot get the namespace %s: skipping secret creation for now.\n", def.namespace)
+		return
+	}
+
+	secret, err := clientset.CoreV1().Secrets(def.namespace).Get(context.TODO(), def.name, metav1.GetOptions{})
+
+	fmt.Printf("Rotating secret %s.%s\n", def.namespace, def.name)
+
+	t := time.Now()
+
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		dataMap := make(map[string][]byte)
+		if def.strategy == "retainPrev" {
+			dataMap[def.key+"_PREV"] = newValue
+		}
+		dataMap[def.key] = newValue
+
+		annotations := make(map[string]string)
+		annotations["kube-secret-rotator/rotated"] = t.Format(time.RFC850)
+
+		secret = &corev1.Secret{
+			Type: corev1.SecretTypeOpaque,
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        def.name,
+				Namespace:   def.namespace,
+				Annotations: annotations,
+			},
+			Data: dataMap,
 		}
 
-		secret, err := clientset.CoreV1().Secrets(secretDefs[i].namespace).Get(context.TODO(), secretDefs[i].name, metav1.GetOptions{})
-
-		fmt.Printf("Rotating secret %s.%s\n", secretDefs[i].namespace, secretDefs[i].name)
-
-		newValue := ([]byte)(randomizeString(40))
-		t := time.Now()
-
+		fmt.Printf("Secret %s.%s doesn't exist. Creating.\n", def.namespace, def.name)
+		_, err = clientset.CoreV1().Secrets(def.namespace).Create(context.TODO(), secret, metav1.CreateOptions{})
 		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			dataMap := make(map[string][]byte)
-			if secretDefs[i].strategy == "retainPrev" {
-				dataMap[secretDefs[i].key+"_PREV"] = newValue
-			}
-			dataMap[secretDefs[i].key] = newValue
-
-			annotations := make(map[string]string)
-			annotations["kube-secret-rotator/rotated"] = t.Format(time.RFC850)
-
-			secret = &corev1.Secret{
-				Type: corev1.SecretTypeOpaque,
-				ObjectMeta: metav1.ObjectMeta{
-					Name:        secretDefs[i].name,
-					Namespace:   secretDefs[i].namespace,
-					Annotations: annotations,
-				},
-				Data: dataMap,
-			}
-
-			fmt.Printf("Secret %s.%s doesn't exist. Creating.\n", secretDefs[i].namespace, secretDefs[i].name)
-			_, err = clientset.CoreV1().Secrets(secretDefs[i].namespace).Create(context.TODO(), secret, metav1.CreateOptions{})
-			if err != nil {
-				fmt.Printf("Failed to create secret: %s\n", err)
-			} else {
-				fmt.Printf("Updated Secret %s.%s->%s with new value: %s\n", secretDefs[i].namespace, secretDefs[i].name, secretDefs[i].key, string(newValue))
-			}
+			fmt.Printf("Failed to create secret: %s\n", err)
 		} else {
-			if secret == nil {
-				fmt.Printf("No Existing secret found.\n")
-				continue
-			}
-			currrentValue, _ := b64.StdEncoding.DecodeString(string(secret.Data[secretDefs[i].key]))
-			fmt.Printf("Current value of the secret %s.%s->%s is %s\n", secretDefs[i].namespace, secretDefs[i].name, secretDefs[i].key, string(currrentValue))
-			if secretDefs[i].strategy == "retainPrev" {
-				secret.Data[secretDefs[i].key+"_PREV"] = secret.Data[secretDefs[i].key]
-			}
-			secret.Data[secretDefs[i].key] = newValue
-			secret.Annotations["Kube-secret-rotator/rotated"] = t.Format(time.RFC850)
-			_, err = clientset.CoreV1().Secrets(secretDefs[i].namespace).Update(context.TODO(), secret, metav1.UpdateOptions{})
-			if err != nil {
-				fmt.Printf("Failed to update secret: %v\n", err)
+			if revealSecrets {
+				fmt.Printf("Updated Secret %s.%s->%s with new value: %s\n", def.namespace, def.name, def.key, string(newValue))
 			} else {
-				fmt.Printf("Updated Secret %s.%s->%s with new value: %s\n", secretDefs[i].namespace, secretDefs[i].name, secretDefs[i].key, string(newValue))
+				fmt.Printf("Updated Secret %s.%s->%s with new value: %s (use --reveal to print plaintext)\n", def.namespace, def.name, def.key, utils.Redact(string(newValue)))
 			}
-
+		}
+	} else {
+		if secret == nil {
+			fmt.Printf("No Existing secret found.\n")
+			return
+		}
+		// NOTE: client-go already base64-decodes Secret.Data for us, so
+		// secret.Data[key] is the raw value, not base64 text. Decoding
+		// it again here previously produced garbage/errors.
+		currentValue := secret.Data[def.key]
+		if revealSecrets {
+			fmt.Printf("Current value of the secret %s.%s->%s is %s\n", def.namespace, def.name, def.key, string(currentValue))
+		} else {
+			fmt.Printf("Current value of the secret %s.%s->%s is %s (use --reveal to print plaintext)\n", def.namespace, def.name, def.key, utils.Redact(string(currentValue)))
+		}
+		if def.strategy == "retainPrev" {
+			secret.Data[def.key+"_PREV"] = secret.Data[def.key]
+		}
+		secret.Data[def.key] = newValue
+		if secret.Annotations == nil {
+			secret.Annotations = make(map[string]string)
+		}
+		secret.Annotations["kube-secret-rotator/rotated"] = t.Format(time.RFC850)
+		_, err = clientset.CoreV1().Secrets(def.namespace).Update(context.TODO(), secret, metav1.UpdateOptions{})
+		if err != nil {
+			fmt.Printf("Failed to update secret: %v\n", err)
+		} else {
+			if revealSecrets {
+				fmt.Printf("Updated Secret %s.%s->%s with new value: %s\n", def.namespace, def.name, def.key, string(newValue))
+			} else {
+				fmt.Printf("Updated Secret %s.%s->%s with new value: %s (use --reveal to print plaintext)\n", def.namespace, def.name, def.key, utils.Redact(string(newValue)))
+			}
 		}
 	}
 }
@@ -247,8 +275,11 @@ func secretInventory(clientset *kubernetes.Clientset) {
 			if getSecretTag(secret) == "[OPAQUE: ROTATE]" {
 				for key, valueBytes := range secret.Data {
 					fmt.Printf("      |-- Key: %s\n", key)
-					keyValue := string(valueBytes)
-					fmt.Printf("        |-- Value: \n%s\n        |-- END VALUE\n", keyValue)
+					if revealSecrets {
+						fmt.Printf("        |-- Value: \n%s\n        |-- END VALUE\n", string(valueBytes))
+					} else {
+						fmt.Printf("        |-- Value: %s (use --reveal to print plaintext)\n", utils.Redact(string(valueBytes)))
+					}
 				}
 			}
 		}
@@ -837,4 +868,200 @@ func getKubeConfig() (*rest.Config, error) {
 	}
 
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
+}
+
+// ===========================================================
+//
+//	PROGRAMMATIC ENTRY POINTS (used by the TUI)
+//
+// ===========================================================
+
+// RunInventoryCapture runs the full Kubernetes inventory against the
+// cluster reachable via kubeconfigPath (pass "" to use the same discovery
+// logic as the CLI: $KUBECONFIG, ~/.kube/config, k3s/kubeadm defaults, or
+// in-cluster config) and returns everything it would normally print to
+// stdout as a single string. reveal controls whether secret values are
+// shown in plaintext or redacted, matching the --reveal flag.
+func buildClientset(kubeconfigPath string) (*kubernetes.Clientset, *rest.Config, error) {
+	var config *rest.Config
+	var err error
+	if kubeconfigPath != "" {
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	} else {
+		config, err = getKubeConfig()
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("error getting Kubernetes config: %w", err)
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error creating client set: %w", err)
+	}
+
+	return clientset, config, nil
+}
+
+func RunInventoryCapture(kubeconfigPath string, reveal bool) (string, error) {
+	prevReveal := revealSecrets
+	revealSecrets = reveal
+	defer func() { revealSecrets = prevReveal }()
+
+	clientset, config, err := buildClientset(kubeconfigPath)
+	if err != nil {
+		return "", err
+	}
+
+	return utils.CaptureStdout(func() {
+		runInventory(clientset, config)
+	})
+}
+
+// RollCredentialsCapture rotates the given secret sequence(s) - same
+// SECRET_NAME,NAMESPACE,KEY,STRATEGY[|...] syntax as the -s CLI flag - and
+// returns everything it would normally print to stdout. This is
+// destructive (it overwrites secret values); callers (like the TUI)
+// should confirm with the user before invoking it.
+func RollCredentialsCapture(kubeconfigPath string, sequences string, reveal bool) (string, error) {
+	prevReveal := revealSecrets
+	revealSecrets = reveal
+	defer func() { revealSecrets = prevReveal }()
+
+	prevSeq := credSequences
+	credSequences = sequences
+	defer func() { credSequences = prevSeq }()
+
+	clientset, config, err := buildClientset(kubeconfigPath)
+	if err != nil {
+		return "", err
+	}
+
+	return utils.CaptureStdout(func() {
+		rollCredentials(clientset, config)
+	})
+}
+
+// ===========================================================
+//
+//	BROWSE PRIMITIVES (used by the TUI's interactive secret browser)
+//
+// ===========================================================
+
+// GenerateRandomSecretValue returns a fresh random value using the same
+// generator rotate() uses, so a TUI-triggered "random" rotation is
+// identical in strength to a CLI-triggered one.
+func GenerateRandomSecretValue(length int) string {
+	if length <= 0 {
+		length = 40
+	}
+	return randomizeString(length)
+}
+
+// ListNamespaces returns every namespace name in the cluster, sorted.
+func ListNamespaces(kubeconfigPath string) ([]string, error) {
+	clientset, _, err := buildClientset(kubeconfigPath)
+	if err != nil {
+		return nil, err
+	}
+
+	nsList, err := clientset.CoreV1().Namespaces().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("could not list namespaces: %w", err)
+	}
+
+	names := make([]string, 0, len(nsList.Items))
+	for _, ns := range nsList.Items {
+		names = append(names, ns.Name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// SecretSummary is a lightweight view of a secret for TUI browsing - no
+// values included, just enough to list and select from.
+type SecretSummary struct {
+	Name string
+	Tag  string
+	Keys []string
+}
+
+// ListSecrets returns a summary of every secret in the given namespace,
+// sorted by name.
+func ListSecrets(kubeconfigPath, namespace string) ([]SecretSummary, error) {
+	clientset, _, err := buildClientset(kubeconfigPath)
+	if err != nil {
+		return nil, err
+	}
+
+	secrets, err := clientset.CoreV1().Secrets(namespace).List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("could not list secrets in %s: %w", namespace, err)
+	}
+
+	out := make([]SecretSummary, 0, len(secrets.Items))
+	for _, secret := range secrets.Items {
+		keys := make([]string, 0, len(secret.Data))
+		for k := range secret.Data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		out = append(out, SecretSummary{
+			Name: secret.Name,
+			Tag:  fmt.Sprintf("%v", getSecretTag(secret)),
+			Keys: keys,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// GetSecretKeyValue returns the decoded value of one key in one secret.
+// The caller is responsible for redacting/displaying it appropriately -
+// this always returns plaintext.
+func GetSecretKeyValue(kubeconfigPath, namespace, secretName, key string) (string, error) {
+	clientset, _, err := buildClientset(kubeconfigPath)
+	if err != nil {
+		return "", err
+	}
+
+	secret, err := clientset.CoreV1().Secrets(namespace).Get(context.TODO(), secretName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("could not get secret %s.%s: %w", namespace, secretName, err)
+	}
+
+	value, ok := secret.Data[key]
+	if !ok {
+		return "", fmt.Errorf("secret %s.%s has no key %q", namespace, secretName, key)
+	}
+	return string(value), nil
+}
+
+// RotateSecretValueCapture rotates exactly one secret key - to a fresh
+// random value if useRandom is true, otherwise to userValue - and returns
+// everything it would normally print to stdout. strategy is "retainPrev"
+// or "omitPrev", same meaning as the CLI's -s flag. This calls into the
+// same rotateSecret() the CLI's multi-sequence rotation uses, so a
+// TUI-triggered rotation behaves identically to a CLI one.
+func RotateSecretValueCapture(kubeconfigPath, namespace, secretName, key, strategy string, useRandom bool, userValue string, reveal bool) (string, error) {
+	prevReveal := revealSecrets
+	revealSecrets = reveal
+	defer func() { revealSecrets = prevReveal }()
+
+	clientset, _, err := buildClientset(kubeconfigPath)
+	if err != nil {
+		return "", err
+	}
+
+	var newValue []byte
+	if useRandom {
+		newValue = []byte(randomizeString(40))
+	} else {
+		newValue = []byte(userValue)
+	}
+
+	def := secretDef{name: secretName, namespace: namespace, key: key, strategy: strategy}
+
+	return utils.CaptureStdout(func() {
+		rotateSecret(clientset, def, newValue)
+	})
 }

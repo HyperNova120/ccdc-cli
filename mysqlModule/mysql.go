@@ -26,8 +26,6 @@ var (
 	restore        bool
 	file           string
 	dbName         string = ""
-	cachedPassword string = ""
-	askedPass      bool   = false
 )
 
 func GetmysqlCmd() *cobra.Command {
@@ -297,7 +295,7 @@ func securityVars(db *sql.DB) {
 	query := `SHOW VARIABLES WHERE Variable_name IN ('local_infile', 'skip_networking', 'have_ssl', 'version')`
 	rows, err := db.Query(query)
 	if err != nil {
-		fmt.Printf("Error retrieving security variables", err)
+		fmt.Printf("Error retrieving security variables: %v\n", err)
 		return
 	}
 	defer rows.Close()
@@ -433,7 +431,7 @@ func runDefault() error {
 }
 
 func connectToDatabase(user string, password string, host string, port int, dbName string, shouldPrintConnecting bool) (*sql.DB, error) {
-	dns := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true", username, password, host, port, dbName)
+	dns := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true", user, password, host, port, dbName)
 	db, err := sql.Open("mysql", dns)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database")
@@ -453,4 +451,82 @@ func connectToDatabase(user string, password string, host string, port int, dbNa
 		fmt.Printf("Connecting to MySQL at %s:%d...\n", host, port)
 	}
 	return db, nil
+}
+
+// ===========================================================
+//
+//	PROGRAMMATIC ENTRY POINTS (used by the TUI)
+//
+// ===========================================================
+
+// RunInventoryCapture runs the full MySQL inventory against the given
+// target and returns everything it would normally print to stdout as a
+// single string. It does not touch package-level CLI flag state beyond
+// what's needed to drive the existing inventory functions, and it resets
+// the cached password afterward so a stale credential can't leak into a
+// later call against a different target.
+func RunInventoryCapture(targetHost string, targetPort int, targetUser string, password string) (string, error) {
+	host = targetHost
+	port = targetPort
+	username = targetUser
+	utils.SetPassword(password)
+	defer utils.ResetPassword()
+
+	return utils.CaptureStdout(func() {
+		runInventory()
+	})
+}
+
+// RunBackupCapture runs a full mysqldump-based backup to filePath and
+// returns everything it would normally print to stdout.
+func RunBackupCapture(targetHost string, targetPort int, targetUser string, password string, filePath string) (string, error) {
+	host = targetHost
+	port = targetPort
+	username = targetUser
+	file = filePath
+	utils.SetPassword(password)
+	defer utils.ResetPassword()
+
+	return utils.CaptureStdout(func() {
+		runBackup()
+	})
+}
+
+// RunRestoreCapture restores from filePath and returns everything it
+// would normally print to stdout. This is destructive - callers (like the
+// TUI) should confirm with the user before invoking it.
+func RunRestoreCapture(targetHost string, targetPort int, targetUser string, password string, filePath string) (string, error) {
+	host = targetHost
+	port = targetPort
+	username = targetUser
+	file = filePath
+	utils.SetPassword(password)
+	defer utils.ResetPassword()
+
+	return utils.CaptureStdout(func() {
+		runRestore()
+	})
+}
+
+// TestConnectionCapture attempts a lightweight ping against the target and
+// returns a human-readable result string plus an error if the connection
+// itself failed (as opposed to just returning "connection failed" text).
+func TestConnectionCapture(targetHost string, targetPort int, targetUser string, password string) (string, error) {
+	host = targetHost
+	port = targetPort
+	username = targetUser
+	utils.SetPassword(password)
+	defer utils.ResetPassword()
+
+	var runErr error
+	out, err := utils.CaptureStdout(func() {
+		runErr = runDefault()
+	})
+	if err != nil {
+		return "", err
+	}
+	if runErr != nil {
+		return out + runErr.Error() + "\n", nil
+	}
+	return out, nil
 }
