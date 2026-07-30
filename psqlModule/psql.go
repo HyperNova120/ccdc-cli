@@ -39,6 +39,7 @@ This Module Contains the Following Functionality:
 This Command must be run with any of the following flags: -irb`,
 		RunE:         runCmd,
 		SilenceUsage: true,
+		SilenceErrors: true,
 	}
 	psqlCmd.Flags().IntVarP(&port, "port", "p", 5432, "Port to Connect to")
 	psqlCmd.Flags().StringVarP(&host, "host", "H", "127.0.0.1", "Host to Connect to")
@@ -54,42 +55,51 @@ This Command must be run with any of the following flags: -irb`,
 
 func runCmd(cmd *cobra.Command, args []string) error {
 	didGetFlag := false
+	var firstErr error
+
 	if cmd.Flags().Changed("inventory") {
-		runInventory()
+		if err := runInventory(); err != nil {
+			firstErr = err
+		}
 		didGetFlag = true
 	}
 
 	if cmd.Flags().Changed("backup") {
-		runBackup()
+		if err := runBackup(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 		didGetFlag = true
 	} else if cmd.Flags().Changed("restore") {
-		runRestore()
+		if err := runRestore(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 		didGetFlag = true
 	}
 
 	if !didGetFlag {
-		fmt.Println("This command must be run with -i, -b, or -r")
+		return fmt.Errorf("this command must be run with -i, -b, or -r")
 	}
-	return nil
+	return firstErr
 }
 
-func runInventory() {
+func runInventory() error {
 	password, err := utils.GetPassword()
 	if err != nil {
 		fmt.Println("Error Reading Password")
-		return
+		return fmt.Errorf("failed to read password: %w", err)
 	}
 
 	db, err := connectToDatabase(username, password, host, port)
 	if err != nil {
 		fmt.Printf("%v\n", err)
-		return
+		return err
 	}
 	defer db.Close()
 
 	userAccounts(db)
 	dataAccessPermissions(db)
 	instanceInventory(db)
+	return nil
 }
 
 func userAccounts(db *pgxpool.Pool) {
@@ -285,25 +295,25 @@ func connectToDatabaseDB(username, password, host string, port int, dbname strin
 	return pool, nil
 }
 
-func runRestore() {
+func runRestore() error {
 	if !utils.CheckCliCmdExist("psql") {
 		fmt.Println("This command requires 'psql' to be in path")
-		return
+		return fmt.Errorf("psql client not found in PATH")
 	} else if len(file) == 0 {
 		fmt.Println("This command requires the -f flag to be set")
-		return
+		return fmt.Errorf("no input file specified (-f)")
 	}
 
 	password, err := utils.GetPassword()
 	if err != nil {
 		fmt.Println("Failed to read password!")
-		return
+		return fmt.Errorf("failed to read password: %w", err)
 	}
 
 	ifile, err := os.Open(file)
 	if err != nil {
-		fmt.Printf("Failed to open backup file: %v", err)
-		return
+		fmt.Printf("Failed to open backup file: %v\n", err)
+		return fmt.Errorf("could not open %s: %w", file, err)
 	}
 	defer ifile.Close()
 
@@ -319,27 +329,28 @@ func runRestore() {
 	cmd.Stderr = os.Stderr
 	cmd.Stdout = os.Stdout
 
-	fmt.Printf("Starting full restoration frum %s\n", file)
+	fmt.Printf("Starting full restoration from %s\n", file)
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("Restore failed: %v\n", err)
-		return
+		return fmt.Errorf("restore failed: %w", err)
 	}
 	fmt.Println("Restoration completed successfully!")
+	return nil
 }
 
-func runBackup() {
+func runBackup() error {
 	if !utils.CheckCliCmdExist("pg_dumpall") {
 		fmt.Println("This command requires 'pg_dumpall' to be in path")
-		return
+		return fmt.Errorf("pg_dumpall not found in PATH")
 	} else if len(file) == 0 {
 		fmt.Println("This command requires the -f flag to be set")
-		return
+		return fmt.Errorf("no output file specified (-f)")
 	}
 
 	password, err := utils.GetPassword()
 	if err != nil {
 		fmt.Println("Failed to read password!")
-		return
+		return fmt.Errorf("failed to read password: %w", err)
 	}
 
 	cmd := exec.Command("pg_dumpall",
@@ -352,21 +363,22 @@ func runBackup() {
 	ofile, err := os.Create(file)
 	if err != nil {
 		fmt.Printf("Failed to create backup file: %v\n", err)
-		return
+		return fmt.Errorf("could not create %s: %w", file, err)
 	}
 	defer ofile.Close()
 
 	cmd.Stdout = ofile
 	cmd.Stderr = os.Stderr
 
-	fmt.Printf("Backing up instance from %s:%d", host, port)
+	fmt.Printf("Backing up instance from %s:%d\n", host, port)
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("Backup Failed: %v\n", err)
 		os.Remove(file)
-		return
+		return fmt.Errorf("pg_dumpall failed: %w", err)
 	}
 
 	fmt.Printf("Created Backup: %s\n", file)
+	return nil
 }
 
 // ===========================================================
@@ -386,9 +398,14 @@ func RunInventoryCapture(targetHost string, targetPort int, targetUser string, p
 	utils.SetPassword(password)
 	defer utils.ResetPassword()
 
-	return utils.CaptureStdout(func() {
-		runInventory()
+	var runErr error
+	out, err := utils.CaptureStdout(func() {
+		runErr = runInventory()
 	})
+	if err != nil {
+		return "", err
+	}
+	return utils.WithResultBanner(out, runErr), nil
 }
 
 // RunBackupCapture runs a full pg_dumpall-based backup to filePath and
@@ -401,9 +418,14 @@ func RunBackupCapture(targetHost string, targetPort int, targetUser string, pass
 	utils.SetPassword(password)
 	defer utils.ResetPassword()
 
-	return utils.CaptureStdout(func() {
-		runBackup()
+	var runErr error
+	out, err := utils.CaptureStdout(func() {
+		runErr = runBackup()
 	})
+	if err != nil {
+		return "", err
+	}
+	return utils.WithResultBanner(out, runErr), nil
 }
 
 // RunRestoreCapture restores from filePath and returns everything it
@@ -417,7 +439,12 @@ func RunRestoreCapture(targetHost string, targetPort int, targetUser string, pas
 	utils.SetPassword(password)
 	defer utils.ResetPassword()
 
-	return utils.CaptureStdout(func() {
-		runRestore()
+	var runErr error
+	out, err := utils.CaptureStdout(func() {
+		runErr = runRestore()
 	})
+	if err != nil {
+		return "", err
+	}
+	return utils.WithResultBanner(out, runErr), nil
 }

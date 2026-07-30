@@ -46,6 +46,7 @@ STRATEGY  - new value creation strategy. (supported values are retainPrev, omitP
             is specified, the old value is not saved`,
 		RunE:         runCmd,
 		SilenceUsage: true,
+		SilenceErrors: true,
 	}
 
 	k8Cmd.Flags().BoolVarP(&inventory, "inventory", "i", false, "Should Run Inventory")
@@ -63,6 +64,7 @@ func runCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	flagFound := false
+	var firstErr error
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		fmt.Printf("Error creating client set: %v\n", err)
@@ -70,23 +72,25 @@ func runCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	if cmd.Flags().Changed("inventory") {
-		runInventory(clientset, config)
+		if err := runInventory(clientset, config); err != nil {
+			firstErr = err
+		}
 		flagFound = true
 	}
 
 	if cmd.Flags().Changed("roll") {
 		if credSequences == "" {
 			fmt.Println("-r flag requires -s to be properly set")
-			return nil
+			return fmt.Errorf("-r flag requires -s to be set")
 		}
 		rollCredentials(clientset, config)
 		flagFound = true
 	}
 
 	if !flagFound {
-		fmt.Println("This subcommand requires -i or -r to be set")
+		return fmt.Errorf("this subcommand requires -i or -r to be set")
 	}
-	return nil
+	return firstErr
 }
 
 // ===============================================
@@ -233,19 +237,33 @@ func randomizeString(i int) string {
 //							INVENTORY CODE
 //===============================================
 
-func runInventory(clientset *kubernetes.Clientset, config *rest.Config) {
-	_ = clusterTopologyAndNodes(clientset, config)
-	_ = podAndNetworkInventory(clientset)
+func runInventory(clientset *kubernetes.Clientset, config *rest.Config) error {
+	var failures []string
+
+	runSection := func(name string, fn func() error) {
+		if err := fn(); err != nil {
+			fmt.Printf("[!] %s failed: %v\n", name, err)
+			failures = append(failures, name)
+		}
+	}
+
+	runSection("cluster topology & nodes", func() error { return clusterTopologyAndNodes(clientset, config) })
+	runSection("pod & network inventory", func() error { return podAndNetworkInventory(clientset) })
 	secretInventory(clientset)
-	_ = ingressAndExternalExposure(clientset)
-	_ = securityAndVulnerabilityAudit(clientset)
-	_ = storageInventory(clientset)
-	_ = systemWarnings(clientset)
-	_ = workloadInventory(clientset)
-	_ = ingressInventory(clientset)
-	_ = rbacAdminAudit(clientset)
+	runSection("ingress & external exposure", func() error { return ingressAndExternalExposure(clientset) })
+	runSection("security & vulnerability audit", func() error { return securityAndVulnerabilityAudit(clientset) })
+	runSection("storage inventory", func() error { return storageInventory(clientset) })
+	runSection("system warnings", func() error { return systemWarnings(clientset) })
+	runSection("workload inventory", func() error { return workloadInventory(clientset) })
+	runSection("ingress inventory", func() error { return ingressInventory(clientset) })
+	runSection("RBAC admin audit", func() error { return rbacAdminAudit(clientset) })
 	apiDiscoveryAudit(clientset)
-	_ = auditSummary(clientset)
+	runSection("audit summary", func() error { return auditSummary(clientset) })
+
+	if len(failures) > 0 {
+		return fmt.Errorf("%d inventory section(s) failed: %s", len(failures), strings.Join(failures, ", "))
+	}
+	return nil
 }
 
 func secretInventory(clientset *kubernetes.Clientset) {
@@ -912,9 +930,14 @@ func RunInventoryCapture(kubeconfigPath string, reveal bool) (string, error) {
 		return "", err
 	}
 
-	return utils.CaptureStdout(func() {
-		runInventory(clientset, config)
+	var runErr error
+	out, err := utils.CaptureStdout(func() {
+		runErr = runInventory(clientset, config)
 	})
+	if err != nil {
+		return "", err
+	}
+	return utils.WithResultBanner(out, runErr), nil
 }
 
 // RollCredentialsCapture rotates the given secret sequence(s) - same

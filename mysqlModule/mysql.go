@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -42,6 +41,7 @@ This Module Contains the Following Functionality:
 This Command must be run with any of the following flags: -irb`,
 		RunE:         runCmd,
 		SilenceUsage: true,
+		SilenceErrors: true,
 	}
 	mysqlCmd.Flags().IntVarP(&port, "port", "p", 3306, "Port to Connect to")
 	mysqlCmd.Flags().StringVarP(&host, "host", "H", "127.0.0.1", "Host to Connect to")
@@ -58,52 +58,62 @@ This Command must be run with any of the following flags: -irb`,
 
 func runCmd(cmd *cobra.Command, args []string) error {
 	didGetFlag := false
+	var firstErr error
+
 	if cmd.Flags().Changed("inventory") {
-		runInventory()
+		if err := runInventory(); err != nil {
+			firstErr = err
+		}
 		didGetFlag = true
 	}
 
 	if cmd.Flags().Changed("backup") {
-		runBackup()
+		if err := runBackup(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 		didGetFlag = true
 	} else if cmd.Flags().Changed("restore") {
-		runRestore()
+		if err := runRestore(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 		didGetFlag = true
 	}
 
 	if !didGetFlag {
-		fmt.Println("This command must be run with -i, -b, or -r")
+		return fmt.Errorf("this command must be run with -i, -b, or -r")
 	}
-	return nil
+	return firstErr
 }
 
-func runInventory() {
+func runInventory() error {
 	password, err := utils.GetPassword()
 	if err != nil {
 		fmt.Println("failed to read password")
-		return
+		return fmt.Errorf("failed to read password: %w", err)
 	}
 
-	if anonymousLoginCheck() != nil {
-		return
+	if err := anonymousLoginCheck(); err != nil {
+		return err
 	}
 
 	db, err := connectToDatabase(username, password, host, port, dbName, false)
 	if err != nil {
 		fmt.Println(err)
-		return
+		return err
 	}
 	defer db.Close()
 
-	if db.Ping() != nil {
-		fmt.Printf("Error: SQL Authentication failed for %s@%s.\n", username, host)
-		return
+	if pingErr := db.Ping(); pingErr != nil {
+		msg := describePingError(pingErr, username, host)
+		fmt.Printf("Error: could not connect as %s@%s: %s\n", username, host, msg)
+		return fmt.Errorf("could not connect as %s@%s: %s", username, host, msg)
 	}
 	userAccountsAndAuth(db)
 	userRoleMappings(db)
 	userPrivileges(db)
 	databaseTableInventory(db)
 	securityVars(db)
+	return nil
 }
 
 func anonymousLoginCheck() error {
@@ -116,20 +126,23 @@ func anonymousLoginCheck() error {
 	utils.PrintHeader("ANONYMOUS LOGIN TEST")
 	err = db.Ping()
 
-	if err != nil {
-		// fmt.Println(err)
-
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) {
-			if mysqlErr.Number == 1045 {
-				fmt.Println("Anonymous login disabled")
-				return nil
-			}
-		}
+	if err == nil {
 		fmt.Printf("Server at %s allows ANONYMOUS login.\n", host)
-	} else {
-		fmt.Println("Anonymous login disabled")
+		return nil
 	}
+
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) && mysqlErr.Number == 1045 {
+		fmt.Println("Anonymous login disabled")
+		return nil
+	}
+
+	// Anything else (network error, timeout, unexpected driver error) is
+	// NOT evidence either way - report it plainly instead of guessing,
+	// since misclassifying it as "allows anonymous login" would be a
+	// false positive and misclassifying it as "disabled" would hide a
+	// real connectivity problem.
+	fmt.Printf("Could not determine anonymous login status: %v\n", err)
 	return nil
 }
 
@@ -316,24 +329,24 @@ func securityVars(db *sql.DB) {
 //	BACKUP COMMAND
 //
 // ===========================================================
-func runBackup() {
+func runBackup() error {
 	if len(file) == 0 {
 		fmt.Println("This command requires -f to be specified")
-		return
+		return fmt.Errorf("no output file specified (-f)")
 	} else if !utils.CheckCliCmdExist("mysqldump") {
 		fmt.Println("This command requires mysqldump to be in path")
-		return
+		return fmt.Errorf("mysqldump not found in PATH")
 	}
 	password, err := utils.GetPassword()
 	if err != nil {
-		fmt.Printf("failed to read password")
-		return
+		fmt.Println("failed to read password")
+		return fmt.Errorf("failed to read password: %w", err)
 	}
 
 	ofile, err := os.Create(file)
 	if err != nil {
-		fmt.Printf("%s", err)
-		return
+		fmt.Printf("%s\n", err)
+		return fmt.Errorf("could not create output file %s: %w", file, err)
 	}
 	defer ofile.Close()
 
@@ -356,10 +369,11 @@ func runBackup() {
 	err = cmd.Run()
 	if err != nil {
 		fmt.Printf("Backup Failed: %s\n", err)
-		return
+		return fmt.Errorf("mysqldump failed: %w", err)
 	}
 
 	fmt.Println("Backup completed successfully")
+	return nil
 }
 
 // ===========================================================
@@ -368,23 +382,23 @@ func runBackup() {
 //
 // ===========================================================
 
-func runRestore() {
+func runRestore() error {
 	if len(file) == 0 {
 		fmt.Println("This command requires -f to be specified")
-		return
+		return fmt.Errorf("no input file specified (-f)")
 	} else if !utils.CheckCliCmdExist("mysql") {
 		fmt.Println("This command requires mysql to be in path")
-		return
+		return fmt.Errorf("mysql client not found in PATH")
 	}
 	password, err := utils.GetPassword()
 	if err != nil {
-		fmt.Printf("failed to read password")
-		return
+		fmt.Println("failed to read password")
+		return fmt.Errorf("failed to read password: %w", err)
 	}
 	ifile, err := os.Open(file)
 	if err != nil {
 		fmt.Println("Could not open specified file")
-		return
+		return fmt.Errorf("could not open %s: %w", file, err)
 	}
 	defer ifile.Close()
 
@@ -401,12 +415,38 @@ func runRestore() {
 	fmt.Printf("Restoring backup from %s...\n", file)
 	err = cmd.Run()
 	if err != nil {
-		fmt.Printf("Restore Failed: %s", err)
-		os.Remove(file)
-		return
+		fmt.Printf("Restore Failed: %s\n", err)
+		return fmt.Errorf("restore failed: %w", err)
 	}
 
 	fmt.Println("Restoration completed successfully")
+	return nil
+}
+
+// describePingError turns a failed db.Ping() into an actionable message
+// instead of a bare "authentication failed", since the actual driver
+// error usually tells you exactly what's wrong (bad password vs. a grant
+// that doesn't match this connection's host, vs. the server being
+// unreachable entirely).
+func describePingError(err error, user string, host string) string {
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) {
+		switch mysqlErr.Number {
+		case 1045:
+			return fmt.Sprintf(
+				"Access denied for %s@%s (%v)\n"+
+					"  If this same user/password works with the `mysql` CLI locally, check whether that\n"+
+					"  login used a Unix socket (matches a '%s'@'localhost' grant) while ccdc-cli always\n"+
+					"  connects over TCP (needs a grant matching '%s'@'%s' or '%s'@'%%'). Run\n"+
+					"  `SELECT user, host FROM mysql.user WHERE user='%s';` on the server to check.",
+				user, host, mysqlErr.Message, user, user, host, user, user)
+		case 1044:
+			return fmt.Sprintf("Access denied for %s@%s to the requested database (%v)", user, host, mysqlErr.Message)
+		default:
+			return fmt.Sprintf("MySQL error %d: %v", mysqlErr.Number, mysqlErr.Message)
+		}
+	}
+	return fmt.Sprintf("could not reach %s: %v (wrong host/port, firewall, or server not listening)", host, err)
 }
 
 func runDefault() error {
@@ -417,7 +457,7 @@ func runDefault() error {
 
 	db, err := connectToDatabase(username, p, host, port, dbName, true)
 	if err != nil {
-		return fmt.Errorf("")
+		return fmt.Errorf("failed to open database handle: %w", err)
 	}
 	defer db.Close()
 	err = db.Ping()
@@ -431,18 +471,24 @@ func runDefault() error {
 }
 
 func connectToDatabase(user string, password string, host string, port int, dbName string, shouldPrintConnecting bool) (*sql.DB, error) {
-	dns := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true", user, password, host, port, dbName)
-	db, err := sql.Open("mysql", dns)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database")
-	}
+	// Build the DSN through the driver's own Config/FormatDSN instead of
+	// hand-formatting "user:pass@tcp(host:port)/db" - a password containing
+	// '@', ':', '/', or other DSN-meaningful characters would silently
+	// corrupt a hand-built string (this is very plausible for generated
+	// CCDC creds) even though the same password works fine with the real
+	// `mysql` CLI, which never has to serialize it into a connection string.
+	cfg := mysql.NewConfig()
+	cfg.User = user
+	cfg.Passwd = password
+	cfg.Net = "tcp"
+	cfg.Addr = fmt.Sprintf("%s:%d", host, port)
+	cfg.DBName = dbName
+	cfg.ParseTime = true
+	cfg.Timeout = 5 * time.Second
 
-	err = db.Ping()
+	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
-		var netErr *net.OpError
-		if errors.As(err, &netErr) {
-			return nil, fmt.Errorf("DB not Listening")
-		}
+		return nil, fmt.Errorf("failed to open database handle: %w", err)
 	}
 
 	db.SetConnMaxLifetime(time.Minute * 3)
@@ -472,9 +518,14 @@ func RunInventoryCapture(targetHost string, targetPort int, targetUser string, p
 	utils.SetPassword(password)
 	defer utils.ResetPassword()
 
-	return utils.CaptureStdout(func() {
-		runInventory()
+	var runErr error
+	out, err := utils.CaptureStdout(func() {
+		runErr = runInventory()
 	})
+	if err != nil {
+		return "", err
+	}
+	return utils.WithResultBanner(out, runErr), nil
 }
 
 // RunBackupCapture runs a full mysqldump-based backup to filePath and
@@ -487,9 +538,14 @@ func RunBackupCapture(targetHost string, targetPort int, targetUser string, pass
 	utils.SetPassword(password)
 	defer utils.ResetPassword()
 
-	return utils.CaptureStdout(func() {
-		runBackup()
+	var runErr error
+	out, err := utils.CaptureStdout(func() {
+		runErr = runBackup()
 	})
+	if err != nil {
+		return "", err
+	}
+	return utils.WithResultBanner(out, runErr), nil
 }
 
 // RunRestoreCapture restores from filePath and returns everything it
@@ -503,9 +559,14 @@ func RunRestoreCapture(targetHost string, targetPort int, targetUser string, pas
 	utils.SetPassword(password)
 	defer utils.ResetPassword()
 
-	return utils.CaptureStdout(func() {
-		runRestore()
+	var runErr error
+	out, err := utils.CaptureStdout(func() {
+		runErr = runRestore()
 	})
+	if err != nil {
+		return "", err
+	}
+	return utils.WithResultBanner(out, runErr), nil
 }
 
 // TestConnectionCapture attempts a lightweight ping against the target and

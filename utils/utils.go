@@ -69,6 +69,18 @@ func CheckCliCmdExist(cmd string) bool {
 	return err == nil
 }
 
+// WithResultBanner prepends a clear pass/fail line to captured command
+// output, so a TUI (or anything else consuming captured text) doesn't
+// have to parse the output to know whether the underlying action
+// actually succeeded - the detailed printed diagnostics remain intact
+// below the banner either way.
+func WithResultBanner(output string, runErr error) string {
+	if runErr == nil {
+		return "=== SUCCEEDED ===\n\n" + output
+	}
+	return fmt.Sprintf("=== FAILED: %v ===\n\n%s", runErr, output)
+}
+
 // Redact returns a fixed-width mask for a secret value, used any time a
 // credential or secret value would otherwise be printed to the terminal.
 // Callers that genuinely need the plaintext (e.g. an explicit --reveal
