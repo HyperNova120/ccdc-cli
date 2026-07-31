@@ -14,6 +14,7 @@ var (
 	targetType           string
 	targetHost           string
 	targetPort           int
+	targetSocket         string
 	targetUsername       string
 	targetKubeconfigPath string
 	targetNotes          string
@@ -39,12 +40,16 @@ var targetsAddCmd = &cobra.Command{
 		default:
 			return fmt.Errorf("--type must be one of: mysql, psql, k8")
 		}
+		if targetSocket != "" && cmd.Flags().Changed("host") {
+			return fmt.Errorf("--host and --socket are mutually exclusive - pick one connection mode")
+		}
 
 		t := config.Target{
 			Name:           name,
 			Type:           config.TargetType(targetType),
 			Host:           targetHost,
 			Port:           targetPort,
+			Socket:         targetSocket,
 			Username:       targetUsername,
 			KubeconfigPath: targetKubeconfigPath,
 			Notes:          targetNotes,
@@ -80,6 +85,8 @@ var targetsListCmd = &cobra.Command{
 				if host == "" {
 					host = "<default kubeconfig>"
 				}
+			} else if t.Socket != "" {
+				host = "unix:" + t.Socket
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n", t.Name, t.Type, host, t.Port, t.Username, t.Notes)
 		}
@@ -102,8 +109,9 @@ var targetsRemoveCmd = &cobra.Command{
 
 func init() {
 	targetsAddCmd.Flags().StringVar(&targetType, "type", "", "Target type: mysql, psql, or k8 (required)")
-	targetsAddCmd.Flags().StringVar(&targetHost, "host", "127.0.0.1", "Host to connect to (mysql/psql)")
+	targetsAddCmd.Flags().StringVar(&targetHost, "host", "127.0.0.1", "Host to connect to via TCP (mysql/psql)")
 	targetsAddCmd.Flags().IntVar(&targetPort, "port", 0, "Port to connect to (mysql/psql; defaults per-type if 0)")
+	targetsAddCmd.Flags().StringVar(&targetSocket, "socket", "", "Path to a Unix socket (mysql) or socket directory (psql) instead of TCP")
 	targetsAddCmd.Flags().StringVar(&targetUsername, "username", "", "Username to connect as (mysql/psql)")
 	targetsAddCmd.Flags().StringVar(&targetKubeconfigPath, "kubeconfig", "", "Path to kubeconfig (k8 only; empty = default discovery)")
 	targetsAddCmd.Flags().StringVar(&targetNotes, "notes", "", "Free-text note (e.g. \"team box 3\")")

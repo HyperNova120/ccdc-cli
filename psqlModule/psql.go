@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"ccdc-cli/utils"
@@ -18,6 +19,7 @@ import (
 var (
 	port      int
 	host      string
+	socket    string
 	username  string
 	inventory bool
 	backup    bool
@@ -42,7 +44,8 @@ This Command must be run with any of the following flags: -irb`,
 		SilenceErrors: true,
 	}
 	psqlCmd.Flags().IntVarP(&port, "port", "p", 5432, "Port to Connect to")
-	psqlCmd.Flags().StringVarP(&host, "host", "H", "127.0.0.1", "Host to Connect to")
+	psqlCmd.Flags().StringVarP(&host, "host", "H", "127.0.0.1", "Host to Connect to (TCP)")
+	psqlCmd.Flags().StringVarP(&socket, "socket", "S", "", "Path to the directory containing a Unix socket to connect through instead of TCP (e.g. /var/run/postgresql)")
 	psqlCmd.Flags().StringVarP(&username, "username", "u", "postgres", "User to Connect as")
 	psqlCmd.Flags().BoolVarP(&inventory, "inventory", "i", false, "Should run Inventory Check")
 	psqlCmd.Flags().BoolVarP(&backup, "backup", "b", false, "Should Backup")
@@ -50,6 +53,7 @@ This Command must be run with any of the following flags: -irb`,
 	psqlCmd.Flags().StringVarP(&file, "file", "f", "", "File to Use for Backup/Restore")
 
 	psqlCmd.MarkFlagsMutuallyExclusive("backup", "restore")
+	psqlCmd.MarkFlagsMutuallyExclusive("host", "socket")
 	return psqlCmd
 }
 
@@ -265,13 +269,49 @@ func connectToDatabase(username, password, host string, port int) (*pgxpool.Pool
 	return connectToDatabaseDB(username, password, host, port, "postgres", true)
 }
 
+// connTarget returns a human-readable description of the current
+// connection target (TCP host:port, or a Unix socket directory) for use
+// in log/error messages.
+func connTarget() string {
+	if socket != "" {
+		return fmt.Sprintf("unix:%s", socket)
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// escapeConnInfo quotes a value for inclusion in a libpq keyword/value
+// connection string (e.g. "host=/var/run/postgresql port=5432 ..."),
+// which is needed for the Unix-socket path since it contains '/' and
+// potentially other characters conninfo parsing would otherwise choke on.
+func escapeConnInfo(v string) string {
+	if v == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(v, " '\\\t\n") {
+		return v
+	}
+	escaped := strings.ReplaceAll(v, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
+	return "'" + escaped + "'"
+}
+
 func connectToDatabaseDB(username, password, host string, port int, dbname string, shouldPrint bool) (*pgxpool.Pool, error) {
 	if shouldPrint {
-		fmt.Printf("Connecting to database: '%s' at %s:%d", dbname, host, port)
+		fmt.Printf("Connecting to database: '%s' via %s", dbname, connTarget())
 	}
 
-	userInfo := url.UserPassword(username, password)
-	dns := fmt.Sprintf("postgres://%s@%s:%d/%s?sslmode=disable", userInfo, host, port, dbname)
+	var dns string
+	if socket != "" {
+		// libpq keyword/value form: a host starting with '/' tells it to
+		// use a Unix socket in that directory (looking for
+		// <dir>/.s.PGSQL.<port>), which is exactly what psql/pg_dumpall
+		// do too when given the same -h <dir>.
+		dns = fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+			escapeConnInfo(socket), port, escapeConnInfo(username), escapeConnInfo(password), escapeConnInfo(dbname))
+	} else {
+		userInfo := url.UserPassword(username, password)
+		dns = fmt.Sprintf("postgres://%s@%s:%d/%s?sslmode=disable", userInfo, host, port, dbname)
+	}
 
 	config, err := pgxpool.ParseConfig(dns)
 	if err != nil {
@@ -293,6 +333,17 @@ func connectToDatabaseDB(username, password, host string, port int, dbname strin
 	}
 
 	return pool, nil
+}
+
+// clientConnHost returns what to pass as -h to the real psql/pg_dumpall
+// binaries: the socket directory in socket mode (same convention psql
+// itself uses - a -h value starting with '/' means "Unix socket here"),
+// or the TCP host otherwise.
+func clientConnHost() string {
+	if socket != "" {
+		return socket
+	}
+	return host
 }
 
 func runRestore() error {
@@ -318,7 +369,7 @@ func runRestore() error {
 	defer ifile.Close()
 
 	cmd := exec.Command("psql",
-		"-h", host,
+		"-h", clientConnHost(),
 		"-p", strconv.Itoa(port),
 		"-U", username,
 		"-d", "postgres")
@@ -329,7 +380,7 @@ func runRestore() error {
 	cmd.Stderr = os.Stderr
 	cmd.Stdout = os.Stdout
 
-	fmt.Printf("Starting full restoration from %s\n", file)
+	fmt.Printf("Starting full restoration from %s via %s\n", file, connTarget())
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("Restore failed: %v\n", err)
 		return fmt.Errorf("restore failed: %w", err)
@@ -354,7 +405,7 @@ func runBackup() error {
 	}
 
 	cmd := exec.Command("pg_dumpall",
-		"-h", host,
+		"-h", clientConnHost(),
 		"-p", strconv.Itoa(port),
 		"-U", username)
 
@@ -370,7 +421,7 @@ func runBackup() error {
 	cmd.Stdout = ofile
 	cmd.Stderr = os.Stderr
 
-	fmt.Printf("Backing up instance from %s:%d\n", host, port)
+	fmt.Printf("Backing up instance from %s\n", connTarget())
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("Backup Failed: %v\n", err)
 		os.Remove(file)
@@ -391,10 +442,11 @@ func runBackup() error {
 // target and returns everything it would normally print to stdout as a
 // single string. Resets the cached password afterward so it can't leak
 // into a later call against a different target.
-func RunInventoryCapture(targetHost string, targetPort int, targetUser string, password string) (string, error) {
+func RunInventoryCapture(targetHost string, targetPort int, targetUser string, targetSocket string, password string) (string, error) {
 	host = targetHost
 	port = targetPort
 	username = targetUser
+	socket = targetSocket
 	utils.SetPassword(password)
 	defer utils.ResetPassword()
 
@@ -410,10 +462,11 @@ func RunInventoryCapture(targetHost string, targetPort int, targetUser string, p
 
 // RunBackupCapture runs a full pg_dumpall-based backup to filePath and
 // returns everything it would normally print to stdout.
-func RunBackupCapture(targetHost string, targetPort int, targetUser string, password string, filePath string) (string, error) {
+func RunBackupCapture(targetHost string, targetPort int, targetUser string, targetSocket string, password string, filePath string) (string, error) {
 	host = targetHost
 	port = targetPort
 	username = targetUser
+	socket = targetSocket
 	file = filePath
 	utils.SetPassword(password)
 	defer utils.ResetPassword()
@@ -431,10 +484,11 @@ func RunBackupCapture(targetHost string, targetPort int, targetUser string, pass
 // RunRestoreCapture restores from filePath and returns everything it
 // would normally print to stdout. This is destructive - callers (like the
 // TUI) should confirm with the user before invoking it.
-func RunRestoreCapture(targetHost string, targetPort int, targetUser string, password string, filePath string) (string, error) {
+func RunRestoreCapture(targetHost string, targetPort int, targetUser string, targetSocket string, password string, filePath string) (string, error) {
 	host = targetHost
 	port = targetPort
 	username = targetUser
+	socket = targetSocket
 	file = filePath
 	utils.SetPassword(password)
 	defer utils.ResetPassword()

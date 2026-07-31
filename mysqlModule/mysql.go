@@ -19,6 +19,7 @@ import (
 var (
 	port           int
 	host           string
+	socket         string
 	username       string
 	inventory      bool
 	backup         bool
@@ -44,7 +45,8 @@ This Command must be run with any of the following flags: -irb`,
 		SilenceErrors: true,
 	}
 	mysqlCmd.Flags().IntVarP(&port, "port", "p", 3306, "Port to Connect to")
-	mysqlCmd.Flags().StringVarP(&host, "host", "H", "127.0.0.1", "Host to Connect to")
+	mysqlCmd.Flags().StringVarP(&host, "host", "H", "127.0.0.1", "Host to Connect to (TCP)")
+	mysqlCmd.Flags().StringVarP(&socket, "socket", "S", "", "Path to a Unix socket to connect through instead of TCP (e.g. /var/run/mysqld/mysqld.sock)")
 	mysqlCmd.Flags().StringVarP(&username, "username", "u", "root", "User to Connect as")
 	mysqlCmd.Flags().BoolVarP(&inventory, "inventory", "i", false, "Should run Inventory Check")
 	mysqlCmd.Flags().BoolVarP(&backup, "backup", "b", false, "Should Backup")
@@ -53,6 +55,7 @@ This Command must be run with any of the following flags: -irb`,
 	// mysqlCmd.Flags().StringVarP(&dbName, "dbName", "n", "", "Database name to Connect to")
 
 	mysqlCmd.MarkFlagsMutuallyExclusive("backup", "restore")
+	mysqlCmd.MarkFlagsMutuallyExclusive("host", "socket")
 	return mysqlCmd
 }
 
@@ -104,9 +107,9 @@ func runInventory() error {
 	defer db.Close()
 
 	if pingErr := db.Ping(); pingErr != nil {
-		msg := describePingError(pingErr, username, host)
-		fmt.Printf("Error: could not connect as %s@%s: %s\n", username, host, msg)
-		return fmt.Errorf("could not connect as %s@%s: %s", username, host, msg)
+		msg := describePingError(pingErr, username)
+		fmt.Printf("Error: could not connect as %s via %s: %s\n", username, connTarget(), msg)
+		return fmt.Errorf("could not connect as %s via %s: %s", username, connTarget(), msg)
 	}
 	userAccountsAndAuth(db)
 	userRoleMappings(db)
@@ -127,7 +130,7 @@ func anonymousLoginCheck() error {
 	err = db.Ping()
 
 	if err == nil {
-		fmt.Printf("Server at %s allows ANONYMOUS login.\n", host)
+		fmt.Printf("Server at %s allows ANONYMOUS login.\n", connTarget())
 		return nil
 	}
 
@@ -329,6 +332,16 @@ func securityVars(db *sql.DB) {
 //	BACKUP COMMAND
 //
 // ===========================================================
+// clientConnArgs returns the -h/-P or --socket flags to pass to the real
+// mysql/mysqldump binaries, matching whichever connection mode
+// connectToDatabase would use for the Go driver.
+func clientConnArgs() []string {
+	if socket != "" {
+		return []string{"--socket", socket}
+	}
+	return []string{"-h", host, "-P", strconv.Itoa(port)}
+}
+
 func runBackup() error {
 	if len(file) == 0 {
 		fmt.Println("This command requires -f to be specified")
@@ -350,21 +363,15 @@ func runBackup() error {
 	}
 	defer ofile.Close()
 
-	cmd := exec.Command("mysqldump",
-		"-u", username,
-		"-p"+password,
-		"-h", host,
-		"-P", strconv.Itoa(port),
-		"--all-databases",
-		"--events",
-		"--routines",
-		"--single-transaction",
-	)
+	args := []string{"-u", username, "-p" + password}
+	args = append(args, clientConnArgs()...)
+	args = append(args, "--all-databases", "--events", "--routines", "--single-transaction")
+	cmd := exec.Command("mysqldump", args...)
 
 	cmd.Stdout = ofile
 	cmd.Stderr = os.Stderr
 
-	fmt.Printf("Starting Full Mysql backup from %s:%d...\n", host, port)
+	fmt.Printf("Starting Full Mysql backup from %s...\n", connTarget())
 
 	err = cmd.Run()
 	if err != nil {
@@ -402,17 +409,14 @@ func runRestore() error {
 	}
 	defer ifile.Close()
 
-	cmd := exec.Command("mysql",
-		"-u", username,
-		"-p"+password,
-		"-h", host,
-		"-P", strconv.Itoa(port),
-	)
+	args := []string{"-u", username, "-p" + password}
+	args = append(args, clientConnArgs()...)
+	cmd := exec.Command("mysql", args...)
 
 	cmd.Stdin = ifile
 	cmd.Stderr = os.Stderr
 
-	fmt.Printf("Restoring backup from %s...\n", file)
+	fmt.Printf("Restoring backup from %s via %s...\n", file, connTarget())
 	err = cmd.Run()
 	if err != nil {
 		fmt.Printf("Restore Failed: %s\n", err)
@@ -428,25 +432,36 @@ func runRestore() error {
 // error usually tells you exactly what's wrong (bad password vs. a grant
 // that doesn't match this connection's host, vs. the server being
 // unreachable entirely).
-func describePingError(err error, user string, host string) string {
+func describePingError(err error, user string) string {
+	target := connTarget()
 	var mysqlErr *mysql.MySQLError
 	if errors.As(err, &mysqlErr) {
 		switch mysqlErr.Number {
 		case 1045:
+			if socket != "" {
+				return fmt.Sprintf(
+					"Access denied for %s via %s (%v)\n"+
+						"  Already connecting over the Unix socket, so this is most likely just a wrong\n"+
+						"  username/password rather than a host-grant mismatch. Double check the credentials,\n"+
+						"  or run `SELECT user, host FROM mysql.user WHERE user='%s';` on the server to see\n"+
+						"  which host patterns this account is actually allowed to authenticate from.",
+					user, target, mysqlErr.Message, user)
+			}
 			return fmt.Sprintf(
 				"Access denied for %s@%s (%v)\n"+
 					"  If this same user/password works with the `mysql` CLI locally, check whether that\n"+
-					"  login used a Unix socket (matches a '%s'@'localhost' grant) while ccdc-cli always\n"+
-					"  connects over TCP (needs a grant matching '%s'@'%s' or '%s'@'%%'). Run\n"+
-					"  `SELECT user, host FROM mysql.user WHERE user='%s';` on the server to check.",
+					"  login used a Unix socket (matches a '%s'@'localhost' grant) while ccdc-cli is connecting\n"+
+					"  over TCP here (needs a grant matching '%s'@'%s' or '%s'@'%%'). Run\n"+
+					"  `SELECT user, host FROM mysql.user WHERE user='%s';` on the server to check, or pass\n"+
+					"  --socket /path/to/mysqld.sock to connect the same way the local CLI does.",
 				user, host, mysqlErr.Message, user, user, host, user, user)
 		case 1044:
-			return fmt.Sprintf("Access denied for %s@%s to the requested database (%v)", user, host, mysqlErr.Message)
+			return fmt.Sprintf("Access denied for %s via %s to the requested database (%v)", user, target, mysqlErr.Message)
 		default:
 			return fmt.Sprintf("MySQL error %d: %v", mysqlErr.Number, mysqlErr.Message)
 		}
 	}
-	return fmt.Sprintf("could not reach %s: %v (wrong host/port, firewall, or server not listening)", host, err)
+	return fmt.Sprintf("could not reach %s: %v (wrong host/port/socket path, firewall, or server not listening)", target, err)
 }
 
 func runDefault() error {
@@ -470,6 +485,16 @@ func runDefault() error {
 	return nil
 }
 
+// connTarget returns a human-readable description of the current
+// connection target (TCP host:port, or a Unix socket path) for use in
+// log/error messages.
+func connTarget() string {
+	if socket != "" {
+		return fmt.Sprintf("unix:%s", socket)
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
 func connectToDatabase(user string, password string, host string, port int, dbName string, shouldPrintConnecting bool) (*sql.DB, error) {
 	// Build the DSN through the driver's own Config/FormatDSN instead of
 	// hand-formatting "user:pass@tcp(host:port)/db" - a password containing
@@ -480,11 +505,20 @@ func connectToDatabase(user string, password string, host string, port int, dbNa
 	cfg := mysql.NewConfig()
 	cfg.User = user
 	cfg.Passwd = password
-	cfg.Net = "tcp"
-	cfg.Addr = fmt.Sprintf("%s:%d", host, port)
 	cfg.DBName = dbName
 	cfg.ParseTime = true
 	cfg.Timeout = 5 * time.Second
+
+	// socket is package-level (not a parameter of this function), so it
+	// isn't shadowed by the host/port parameters above - it reflects
+	// whatever -S/--socket was set to for this invocation.
+	if socket != "" {
+		cfg.Net = "unix"
+		cfg.Addr = socket
+	} else {
+		cfg.Net = "tcp"
+		cfg.Addr = fmt.Sprintf("%s:%d", host, port)
+	}
 
 	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
@@ -494,7 +528,11 @@ func connectToDatabase(user string, password string, host string, port int, dbNa
 	db.SetConnMaxLifetime(time.Minute * 3)
 	db.SetMaxOpenConns(6)
 	if shouldPrintConnecting {
-		fmt.Printf("Connecting to MySQL at %s:%d...\n", host, port)
+		if socket != "" {
+			fmt.Printf("Connecting to MySQL via socket %s...\n", socket)
+		} else {
+			fmt.Printf("Connecting to MySQL at %s:%d...\n", host, port)
+		}
 	}
 	return db, nil
 }
@@ -511,10 +549,11 @@ func connectToDatabase(user string, password string, host string, port int, dbNa
 // what's needed to drive the existing inventory functions, and it resets
 // the cached password afterward so a stale credential can't leak into a
 // later call against a different target.
-func RunInventoryCapture(targetHost string, targetPort int, targetUser string, password string) (string, error) {
+func RunInventoryCapture(targetHost string, targetPort int, targetUser string, targetSocket string, password string) (string, error) {
 	host = targetHost
 	port = targetPort
 	username = targetUser
+	socket = targetSocket
 	utils.SetPassword(password)
 	defer utils.ResetPassword()
 
@@ -530,10 +569,11 @@ func RunInventoryCapture(targetHost string, targetPort int, targetUser string, p
 
 // RunBackupCapture runs a full mysqldump-based backup to filePath and
 // returns everything it would normally print to stdout.
-func RunBackupCapture(targetHost string, targetPort int, targetUser string, password string, filePath string) (string, error) {
+func RunBackupCapture(targetHost string, targetPort int, targetUser string, targetSocket string, password string, filePath string) (string, error) {
 	host = targetHost
 	port = targetPort
 	username = targetUser
+	socket = targetSocket
 	file = filePath
 	utils.SetPassword(password)
 	defer utils.ResetPassword()
@@ -551,10 +591,11 @@ func RunBackupCapture(targetHost string, targetPort int, targetUser string, pass
 // RunRestoreCapture restores from filePath and returns everything it
 // would normally print to stdout. This is destructive - callers (like the
 // TUI) should confirm with the user before invoking it.
-func RunRestoreCapture(targetHost string, targetPort int, targetUser string, password string, filePath string) (string, error) {
+func RunRestoreCapture(targetHost string, targetPort int, targetUser string, targetSocket string, password string, filePath string) (string, error) {
 	host = targetHost
 	port = targetPort
 	username = targetUser
+	socket = targetSocket
 	file = filePath
 	utils.SetPassword(password)
 	defer utils.ResetPassword()
@@ -572,10 +613,11 @@ func RunRestoreCapture(targetHost string, targetPort int, targetUser string, pas
 // TestConnectionCapture attempts a lightweight ping against the target and
 // returns a human-readable result string plus an error if the connection
 // itself failed (as opposed to just returning "connection failed" text).
-func TestConnectionCapture(targetHost string, targetPort int, targetUser string, password string) (string, error) {
+func TestConnectionCapture(targetHost string, targetPort int, targetUser string, targetSocket string, password string) (string, error) {
 	host = targetHost
 	port = targetPort
 	username = targetUser
+	socket = targetSocket
 	utils.SetPassword(password)
 	defer utils.ResetPassword()
 

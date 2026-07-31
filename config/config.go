@@ -29,6 +29,7 @@ type Target struct {
 	Type           TargetType `yaml:"type"`
 	Host           string     `yaml:"host,omitempty"`
 	Port           int        `yaml:"port,omitempty"`
+	Socket         string     `yaml:"socket,omitempty"`
 	Username       string     `yaml:"username,omitempty"`
 	KubeconfigPath string     `yaml:"kubeconfig_path,omitempty"`
 	Notes          string     `yaml:"notes,omitempty"`

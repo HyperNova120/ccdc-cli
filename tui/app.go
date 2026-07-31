@@ -888,20 +888,26 @@ func (m *model) focusAddInput(i int) tea.Cmd {
 func (m *model) buildAddInputs(prefill config.Target) {
 	switch m.addType {
 	case config.TypeMySQL, config.TypePsql:
-		m.addLabels = []string{"Name", "Host", "Port", "Username", "Notes"}
-		m.addInputs = make([]textinput.Model, 5)
+		m.addLabels = []string{"Name", "Host", "Port", "Socket path (blank = use Host/Port)", "Username", "Notes"}
+		m.addInputs = make([]textinput.Model, 6)
 		m.addInputs[0] = newTextInput("e.g. web1")
 		m.addInputs[1] = newTextInput("127.0.0.1")
 		m.addInputs[2] = newTextInput(defaultPortFor(m.addType))
-		m.addInputs[3] = newTextInput("root")
-		m.addInputs[4] = newTextInput("optional note")
+		if m.addType == config.TypeMySQL {
+			m.addInputs[3] = newTextInput("/var/run/mysqld/mysqld.sock")
+		} else {
+			m.addInputs[3] = newTextInput("/var/run/postgresql")
+		}
+		m.addInputs[4] = newTextInput("root")
+		m.addInputs[5] = newTextInput("optional note")
 		m.addInputs[0].SetValue(prefill.Name)
 		m.addInputs[1].SetValue(prefill.Host)
 		if prefill.Port != 0 {
 			m.addInputs[2].SetValue(strconv.Itoa(prefill.Port))
 		}
-		m.addInputs[3].SetValue(prefill.Username)
-		m.addInputs[4].SetValue(prefill.Notes)
+		m.addInputs[3].SetValue(prefill.Socket)
+		m.addInputs[4].SetValue(prefill.Username)
+		m.addInputs[5].SetValue(prefill.Notes)
 	case config.TypeK8s:
 		m.addLabels = []string{"Name", "Kubeconfig Path (blank = auto-detect)", "Notes"}
 		m.addInputs = make([]textinput.Model, 3)
@@ -943,12 +949,18 @@ func (m *model) submitAddTarget() (bool, string) {
 	switch m.addType {
 	case config.TypeMySQL, config.TypePsql:
 		host := strings.TrimSpace(m.addInputs[1].Value())
+		portStr := strings.TrimSpace(m.addInputs[2].Value())
+		socket := strings.TrimSpace(m.addInputs[3].Value())
+
+		if socket != "" && host != "" {
+			return false, "Set either Host or Socket path, not both"
+		}
 		if host == "" {
 			host = "127.0.0.1"
 		}
 		t.Host = host
+		t.Socket = socket
 
-		portStr := strings.TrimSpace(m.addInputs[2].Value())
 		if portStr == "" {
 			t.Port = 0 // resolved to the type default at run time
 		} else {
@@ -958,8 +970,8 @@ func (m *model) submitAddTarget() (bool, string) {
 			}
 			t.Port = p
 		}
-		t.Username = strings.TrimSpace(m.addInputs[3].Value())
-		t.Notes = strings.TrimSpace(m.addInputs[4].Value())
+		t.Username = strings.TrimSpace(m.addInputs[4].Value())
+		t.Notes = strings.TrimSpace(m.addInputs[5].Value())
 	case config.TypeK8s:
 		t.KubeconfigPath = strings.TrimSpace(m.addInputs[1].Value())
 		t.Notes = strings.TrimSpace(m.addInputs[2].Value())
@@ -1028,7 +1040,7 @@ func (m model) viewTargetList() string {
 	}
 
 	for i, t := range m.targets {
-		line := fmt.Sprintf("%-20s %s", t.Name, typeTagStyle.Render("["+string(t.Type)+"]"))
+		line := fmt.Sprintf("%-20s %-8s %s", t.Name, typeTagStyle.Render("["+string(t.Type)+"]"), helpStyle.Render(targetConnDesc(t)))
 		if t.Notes != "" {
 			line += "  " + helpStyle.Render(t.Notes)
 		}
@@ -1088,7 +1100,7 @@ func (m model) viewConfirmDelete() string {
 
 func (m model) viewActionMenu() string {
 	s := titleStyle.Render("ccdc-cli dashboard") + "\n\n"
-	s += fmt.Sprintf("Target: %s [%s]\n\n", m.selected.Name, m.selected.Type)
+	s += fmt.Sprintf("Target: %s [%s]  %s\n\n", m.selected.Name, m.selected.Type, helpStyle.Render(targetConnDesc(m.selected)))
 	for i, a := range m.actions {
 		line := a.label()
 		if i == m.actionCursor {
@@ -1119,11 +1131,27 @@ func (m model) viewFilePrompt() string {
 
 func (m model) viewPasswordPrompt() string {
 	s := titleStyle.Render("ccdc-cli dashboard") + "\n\n"
-	s += fmt.Sprintf("Target: %s (%s@%s:%d)   Action: %s\n\n",
-		m.selected.Name, m.selected.Username, m.selected.Host, m.selected.Port, m.pendingAction.label())
+	s += fmt.Sprintf("Target: %s (%s@%s)   Action: %s\n\n",
+		m.selected.Name, m.selected.Username, targetConnDesc(m.selected), m.pendingAction.label())
 	s += m.passwordInput.View() + "\n\n"
 	s += helpStyle.Render("enter: continue   esc: back")
 	return s
+}
+
+// targetConnDesc formats a target's connection info for display,
+// preferring the socket path when a mysql/psql target is configured to
+// use one.
+func targetConnDesc(t config.Target) string {
+	if t.Type == config.TypeK8s {
+		if t.KubeconfigPath != "" {
+			return t.KubeconfigPath
+		}
+		return "<default kubeconfig>"
+	}
+	if t.Socket != "" {
+		return "unix:" + t.Socket
+	}
+	return fmt.Sprintf("%s:%d", t.Host, t.Port)
 }
 
 func (m model) viewSequenceInput() string {
@@ -1326,11 +1354,11 @@ func runActionCmd(t config.Target, action actionType, password string, filePath 
 			}
 			switch action {
 			case actionInventory:
-				out, err = mysqlModule.RunInventoryCapture(t.Host, port, t.Username, password)
+				out, err = mysqlModule.RunInventoryCapture(t.Host, port, t.Username, t.Socket, password)
 			case actionBackup:
-				out, err = mysqlModule.RunBackupCapture(t.Host, port, t.Username, password, filePath)
+				out, err = mysqlModule.RunBackupCapture(t.Host, port, t.Username, t.Socket, password, filePath)
 			case actionRestore:
-				out, err = mysqlModule.RunRestoreCapture(t.Host, port, t.Username, password, filePath)
+				out, err = mysqlModule.RunRestoreCapture(t.Host, port, t.Username, t.Socket, password, filePath)
 			default:
 				err = fmt.Errorf("action %q not supported for mysql targets", action.label())
 			}
@@ -1342,11 +1370,11 @@ func runActionCmd(t config.Target, action actionType, password string, filePath 
 			}
 			switch action {
 			case actionInventory:
-				out, err = psqlModule.RunInventoryCapture(t.Host, port, t.Username, password)
+				out, err = psqlModule.RunInventoryCapture(t.Host, port, t.Username, t.Socket, password)
 			case actionBackup:
-				out, err = psqlModule.RunBackupCapture(t.Host, port, t.Username, password, filePath)
+				out, err = psqlModule.RunBackupCapture(t.Host, port, t.Username, t.Socket, password, filePath)
 			case actionRestore:
-				out, err = psqlModule.RunRestoreCapture(t.Host, port, t.Username, password, filePath)
+				out, err = psqlModule.RunRestoreCapture(t.Host, port, t.Username, t.Socket, password, filePath)
 			default:
 				err = fmt.Errorf("action %q not supported for psql targets", action.label())
 			}
